@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -35,15 +35,14 @@ logger = logging.getLogger(__name__)
 
 def _process_file(
     idx: int,
-    fname: str,
-    in_dir: str,
+    path: Path,
     dm: np.ndarray,
     bm: np.ndarray,
     params: RegSegParams,
-    top_dir: str,
-    topbw_dir: str,
-    bot_dir: str,
-    botbw_dir: str,
+    top_dir: Path,
+    topbw_dir: Path,
+    bot_dir: Path,
+    botbw_dir: Path,
     binDif_top: np.ndarray,
     binDif_bot: np.ndarray,
 ):
@@ -51,24 +50,23 @@ def _process_file(
 
     Returns the index, filename, current image, and processing results.
     """
-    path = os.path.join(in_dir, fname)
     cur = imread_gray(path)
     reg = register_ecc(cur, dm, params)
     binReg_top = cv2.subtract(reg, bm)
     topDiff = cv2.subtract(clahe_equalize(binDif_top), clahe_equalize(binReg_top))
-    cv2.imwrite(os.path.join(top_dir, fname), to_uint8(topDiff))
+    cv2.imwrite(str(top_dir / path.name), to_uint8(topDiff))
     topBW = segment_image(topDiff, params)
-    cv2.imwrite(os.path.join(topbw_dir, fname), to_uint8(topBW))
+    cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
     areas_top = connected_component_areas(topBW)
     areas_top.sort(reverse=True)
     binReg_bot = cv2.subtract(reg, complement(bm))
     botDiff = cv2.subtract(clahe_equalize(binDif_bot), clahe_equalize(binReg_bot))
-    cv2.imwrite(os.path.join(bot_dir, fname), to_uint8(botDiff))
+    cv2.imwrite(str(bot_dir / path.name), to_uint8(botDiff))
     botBW = segment_image(botDiff, params)
-    cv2.imwrite(os.path.join(botbw_dir, fname), to_uint8(botBW))
+    cv2.imwrite(str(botbw_dir / path.name), to_uint8(botBW))
     areas_bot = connected_component_areas(botBW)
     areas_bot.sort(reverse=True)
-    return idx, fname, cur, topDiff, botDiff, areas_top, areas_bot
+    return idx, path.name, cur, topDiff, botDiff, areas_top, areas_bot
 
 
 class ProcessorWorker(QObject):
@@ -81,12 +79,12 @@ class ProcessorWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, in_dir: str, out_dir: str, dm_path: str, bm_path: str, params: RegSegParams):
+    def __init__(self, in_dir: Path | str, out_dir: Path | str, dm_path: Path | str, bm_path: Path | str, params: RegSegParams):
         super().__init__()
-        self.in_dir = in_dir
-        self.out_dir = out_dir
-        self.dm_path = dm_path
-        self.bm_path = bm_path
+        self.in_dir = Path(in_dir)
+        self.out_dir = Path(out_dir)
+        self.dm_path = Path(dm_path)
+        self.bm_path = Path(bm_path)
         self.params = params
         self._stop = False
         self._pause = False
@@ -131,10 +129,10 @@ class ProcessorWorker(QObject):
             dm = imread_gray(self.dm_path)
             bm = imread_gray(self.bm_path)
             self.imagePreviews.emit(dm, bm, dm)
-            top_dir = os.path.join(self.out_dir, "top")
-            topbw_dir = os.path.join(self.out_dir, "topBW")
-            bot_dir = os.path.join(self.out_dir, "bottom")
-            botbw_dir = os.path.join(self.out_dir, "bottomBW")
+            top_dir = self.out_dir / "top"
+            topbw_dir = self.out_dir / "topBW"
+            bot_dir = self.out_dir / "bottom"
+            botbw_dir = self.out_dir / "bottomBW"
             for d in (top_dir, topbw_dir, bot_dir, botbw_dir):
                 ensure_dir(d)
             binDif_top = cv2.subtract(dm, bm)
@@ -146,15 +144,15 @@ class ProcessorWorker(QObject):
                 self.error.emit(msg)
                 return
             total = len(files)
-            top_xlsx = os.path.join(self.out_dir, "top.xlsx")
-            bot_xlsx = os.path.join(self.out_dir, "bottom.xlsx")
-            if os.path.exists(top_xlsx):
+            top_xlsx = self.out_dir / "top.xlsx"
+            bot_xlsx = self.out_dir / "bottom.xlsx"
+            if top_xlsx.exists():
                 top_wb = load_workbook(top_xlsx)
                 top_ws = top_wb.active
             else:
                 top_wb = Workbook()
                 top_ws = top_wb.active
-            if os.path.exists(bot_xlsx):
+            if bot_xlsx.exists():
                 bot_wb = load_workbook(bot_xlsx)
                 bot_ws = bot_wb.active
             else:
@@ -168,8 +166,7 @@ class ProcessorWorker(QObject):
                     executor.submit(
                         _process_file,
                         idx,
-                        fname,
-                        self.in_dir,
+                        path,
                         dm,
                         bm,
                         self.params,
@@ -180,7 +177,7 @@ class ProcessorWorker(QObject):
                         binDif_top,
                         binDif_bot,
                     )
-                    for idx, fname in enumerate(files, start=1)
+                    for idx, path in enumerate(files, start=1)
                 ]
                 completed = 0
                 for future in as_completed(futures):
