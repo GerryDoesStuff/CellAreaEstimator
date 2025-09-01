@@ -16,7 +16,6 @@ from io_utils import (
     imread_gray,
     ensure_dir,
     list_jpgs,
-    write_sorted_areas_xlsx,
     to_uint8,
 )
 from processing import (
@@ -27,6 +26,7 @@ from processing import (
     clahe_equalize,
     complement,
 )
+from openpyxl import Workbook, load_workbook
 
 
 class ProcessorWorker(QObject):
@@ -84,6 +84,7 @@ class ProcessorWorker(QObject):
     @pyqtSlot()
     def run(self) -> None:
         """Entry point for the worker thread."""
+        top_wb = bot_wb = None
         try:
             dm = imread_gray(self.dm_path)
             bm = imread_gray(self.bm_path)
@@ -99,11 +100,22 @@ class ProcessorWorker(QObject):
             files = list_jpgs(self.in_dir)
             if not files:
                 self.error.emit("No .jpg files found in the input directory.")
-                self.finished.emit()
                 return
             total = len(files)
             top_xlsx = os.path.join(self.out_dir, "top.xlsx")
             bot_xlsx = os.path.join(self.out_dir, "bottom.xlsx")
+            if os.path.exists(top_xlsx):
+                top_wb = load_workbook(top_xlsx)
+                top_ws = top_wb.active
+            else:
+                top_wb = Workbook()
+                top_ws = top_wb.active
+            if os.path.exists(bot_xlsx):
+                bot_wb = load_workbook(bot_xlsx)
+                bot_ws = bot_wb.active
+            else:
+                bot_wb = Workbook()
+                bot_ws = bot_wb.active
             for idx, fname in enumerate(files, start=1):
                 self._check_pause_stop()
                 self.status.emit(f"Processing {idx}/{total}: {fname}")
@@ -119,7 +131,8 @@ class ProcessorWorker(QObject):
                 cv2.imwrite(os.path.join(topbw_dir, fname), to_uint8(topBW))
                 areas_top = connected_component_areas(topBW)
                 areas_top.sort(reverse=True)
-                write_sorted_areas_xlsx(top_xlsx, idx, areas_top)
+                for row, area in enumerate(areas_top, start=1):
+                    top_ws.cell(row=row, column=idx, value=int(area))
                 binReg_bot = cv2.subtract(reg, complement(bm))
                 botDiff = cv2.subtract(clahe_equalize(binDif_bot), clahe_equalize(binReg_bot))
                 self.diffPreviews.emit(topDiff, botDiff)
@@ -128,12 +141,17 @@ class ProcessorWorker(QObject):
                 cv2.imwrite(os.path.join(botbw_dir, fname), to_uint8(botBW))
                 areas_bot = connected_component_areas(botBW)
                 areas_bot.sort(reverse=True)
-                write_sorted_areas_xlsx(bot_xlsx, idx, areas_bot)
+                for row, area in enumerate(areas_bot, start=1):
+                    bot_ws.cell(row=row, column=idx, value=int(area))
                 progress_pct = int(idx / total * 100)
                 self.progress.emit(progress_pct)
             self.status.emit("Done.")
             self.progress.emit(100)
-            self.finished.emit()
         except Exception as exc:
             self.error.emit(str(exc))
+        finally:
+            if top_wb is not None:
+                top_wb.save(top_xlsx)
+            if bot_wb is not None:
+                bot_wb.save(bot_xlsx)
             self.finished.emit()
