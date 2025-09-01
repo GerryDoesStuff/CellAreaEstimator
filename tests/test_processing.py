@@ -36,3 +36,17 @@ def test_mask_preparation_dm_bm():
     assert bm.shape == dm.shape
     assert bm.min() >= 0 and bm.max() <= 255
     assert set(np.unique(bm)).issubset({0, 255})
+
+
+def test_registration_with_roi():
+    fixed = load("fixed.pgm")
+    moving = load("moving.pgm")
+    params = RegSegParams(maxIter=50)
+    roi = (2, 2, 10, 10)
+    reg, mask = register_ecc(moving, fixed, params, roi=roi)
+    assert reg.shape == (10, 10)
+    assert mask.shape == (10, 10)
+    assert mask.min() == 1 and mask.max() == 1
+    fixed_roi = fixed[2:12, 2:12]
+    diff = cv2.subtract(fixed_roi, reg)
+    assert diff.max() == 0

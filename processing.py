@@ -131,25 +131,34 @@ def register_ecc(
     fixed: np.ndarray,
     params: RegSegParams,
     use_gpu: bool | None = None,
+    roi: tuple[int, int, int, int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Register *moving* to *fixed* using OpenCV ECC with an affine model.
 
-    Returns the registered image and a mask of valid (overlapping) pixels.  If
-    ``use_gpu`` is ``True`` (or ``None`` and CUDA is available), Gaussian blur and
-    affine warping are executed via :mod:`cv2.cuda` with automatic fallback to
-    CPU.
+    Returns the registered image and a mask of valid (overlapping) pixels. If
+    ``roi`` is provided, both registration and the returned arrays are
+    restricted to that region of the input images.  When ``use_gpu`` is ``True``
+    (or ``None`` and CUDA is available), Gaussian blur and affine warping are
+    executed via :mod:`cv2.cuda` with automatic fallback to CPU.
     """
     use_gpu = gpu_enabled(use_gpu)
+    if roi is not None:
+        x, y, w, h = roi
+        fixed_roi = fixed[y:y + h, x:x + w]
+        moving_roi = moving[y:y + h, x:x + w]
+    else:
+        fixed_roi = fixed
+        moving_roi = moving
     if params.gausBlurDif > 0:
         kf = ksize_from_sigma(params.gausBlurDif)
-        fixed_blur = gaussian_blur(fixed, kf, params.gausBlurDif, use_gpu) if kf > 0 else fixed
+        fixed_blur = gaussian_blur(fixed_roi, kf, params.gausBlurDif, use_gpu) if kf > 0 else fixed_roi
     else:
-        fixed_blur = fixed
+        fixed_blur = fixed_roi
     if params.gausBlurIn > 0:
         km = ksize_from_sigma(params.gausBlurIn)
-        moving_blur = gaussian_blur(moving, km, params.gausBlurIn, use_gpu) if km > 0 else moving
+        moving_blur = gaussian_blur(moving_roi, km, params.gausBlurIn, use_gpu) if km > 0 else moving_roi
     else:
-        moving_blur = moving
+        moving_blur = moving_roi
     fb = to_uint8(fixed_blur).astype(np.float32) / 255.0
     mb = to_uint8(moving_blur).astype(np.float32) / 255.0
     warp_matrix = np.eye(2, 3, dtype=np.float32)
@@ -158,11 +167,11 @@ def register_ecc(
         cv2.findTransformECC(fb, mb, warp_matrix, cv2.MOTION_AFFINE, criteria)
     except cv2.error as exc:
         logger.warning("ECC registration failed: %s", exc)
-    h, w = fixed.shape
+    h_full, w_full = fixed.shape
     registered = warp_affine(
         moving,
         warp_matrix,
-        (w, h),
+        (w_full, h_full),
         flags=cv2.INTER_LINEAR,
         border_mode=cv2.BORDER_REPLICATE,
         use_gpu=use_gpu,
@@ -170,12 +179,15 @@ def register_ecc(
     mask = warp_affine(
         np.ones_like(moving, dtype=np.uint8),
         warp_matrix,
-        (w, h),
+        (w_full, h_full),
         flags=cv2.INTER_NEAREST,
         border_mode=cv2.BORDER_CONSTANT,
         use_gpu=use_gpu,
     )
     mask = (mask > 0).astype(np.uint8)
+    if roi is not None:
+        registered = registered[y:y + h, x:x + w]
+        mask = mask[y:y + h, x:x + w]
     return registered, mask
 
 
