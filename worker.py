@@ -111,7 +111,7 @@ class ProcessorWorker(QObject):
         self,
         in_dir: Path | str,
         out_dir: Path | str,
-        dm_path: Path | str,
+        dm_path: Path | str | None,
         bm_path: Path | str,
         params: RegSegParams,
         files: Sequence[Path],
@@ -120,7 +120,7 @@ class ProcessorWorker(QObject):
         super().__init__()
         self.in_dir = Path(in_dir)
         self.out_dir = Path(out_dir)
-        self.dm_path = Path(dm_path)
+        self.dm_path = Path(dm_path) if dm_path is not None else None
         self.bm_path = Path(bm_path)
         self.params = params
         self.files = [Path(f) for f in files]
@@ -173,7 +173,13 @@ class ProcessorWorker(QObject):
                 return
             sample = imread_gray(files[0])
             full_shape = sample.shape
-            dm_raw = imread_gray(self.dm_path)
+            if self.dm_path is not None and self.dm_path.is_file():
+                dm_raw = imread_gray(self.dm_path)
+            else:
+                # If no difference mask was provided, use a blank image so that
+                # processing can still continue.  This mirrors the behaviour of
+                # a zero DM on disk.
+                dm_raw = np.zeros(full_shape, dtype=sample.dtype)
             bm_raw = imread_gray(self.bm_path)
             if self.dm_roi is not None:
                 x, y, w, h = self.dm_roi
