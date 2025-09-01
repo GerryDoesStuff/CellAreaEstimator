@@ -139,7 +139,7 @@ class ProcessorWorker(QObject):
             binDif_bot = cv2.subtract(dm, complement(bm))
             files = list_jpgs(self.in_dir)
             if not files:
-                msg = "No .jpg files found in the input directory."
+                msg = f"No image files found in {self.in_dir}"
                 logger.warning(msg)
                 self.error.emit(msg)
                 return
@@ -158,7 +158,7 @@ class ProcessorWorker(QObject):
             else:
                 bot_wb = Workbook()
                 bot_ws = bot_wb.active
-            logger.info("Processing %d files", len(files))
+            logger.info("Processing %d files in %s", len(files), self.in_dir)
             results_top: dict[int, list[int]] = {}
             results_bot: dict[int, list[int]] = {}
             with ThreadPoolExecutor() as executor:

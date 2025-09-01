@@ -51,8 +51,10 @@ def ensure_dir(path: Path | str) -> None:
 
 def list_jpgs(folder: Path | str) -> List[Path]:
     p = Path(folder)
-    files = [f for f in p.iterdir() if f.suffix.lower() == '.jpg']
-    logger.debug("Found %d .jpg files in %s", len(files), p)
+    files = sorted(
+        (f.resolve() for f in p.glob("*.{jpg,jpeg,png,tif,tiff}", case_sensitive=False))
+    )
+    logger.debug("Found %d image files in %s", len(files), p)
     return files
 
 
