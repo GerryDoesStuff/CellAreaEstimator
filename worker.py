@@ -45,16 +45,26 @@ def _process_file(
     botbw_dir: Path,
     binDif_top: np.ndarray,
     binDif_bot: np.ndarray,
+    roi: tuple[int, int, int, int] | None = None,
 ):
     """Process a single image file.
 
     Returns the index, filename, current image, and processing results.
     """
     cur = imread_gray(path)
-    reg, mask = register_ecc(cur, dm, params)
+    reg, mask = register_ecc(cur, dm, params, roi=roi)
+    if roi is not None:
+        x, y, w, h = roi
+        bm_roi = bm[y:y + h, x:x + w]
+        binDif_top_roi = binDif_top[y:y + h, x:x + w]
+        binDif_bot_roi = binDif_bot[y:y + h, x:x + w]
+    else:
+        bm_roi = bm
+        binDif_top_roi = binDif_top
+        binDif_bot_roi = binDif_bot
     reg = reg * mask
-    binDif_top_masked = binDif_top * mask
-    binDif_bot_masked = binDif_bot * mask
+    binDif_top_masked = binDif_top_roi * mask
+    binDif_bot_masked = binDif_bot_roi * mask
     ys, xs = np.nonzero(mask)
     if ys.size == 0 or xs.size == 0:
         empty = np.zeros_like(mask)
@@ -62,7 +72,7 @@ def _process_file(
     y1, y2 = ys.min(), ys.max() + 1
     x1, x2 = xs.min(), xs.max() + 1
     reg = reg[y1:y2, x1:x2]
-    bm_crop = bm[y1:y2, x1:x2]
+    bm_crop = bm_roi[y1:y2, x1:x2]
     binDif_top_crop = binDif_top_masked[y1:y2, x1:x2]
     binDif_bot_crop = binDif_bot_masked[y1:y2, x1:x2]
     mask_crop = mask[y1:y2, x1:x2]
@@ -105,6 +115,7 @@ class ProcessorWorker(QObject):
         bm_path: Path | str,
         params: RegSegParams,
         files: Sequence[Path],
+        dm_roi: tuple[int, int, int, int] | None = None,
     ):
         super().__init__()
         self.in_dir = Path(in_dir)
@@ -113,6 +124,7 @@ class ProcessorWorker(QObject):
         self.bm_path = Path(bm_path)
         self.params = params
         self.files = [Path(f) for f in files]
+        self.dm_roi = dm_roi
         self._stop = False
         self._pause = False
         self._mutex = QMutex()
@@ -153,8 +165,27 @@ class ProcessorWorker(QObject):
         """Entry point for the worker thread."""
         top_wb = bot_wb = None
         try:
-            dm = imread_gray(self.dm_path)
-            bm = imread_gray(self.bm_path)
+            files = self.files
+            if not files:
+                msg = f"No image files found in {self.in_dir}"
+                logger.warning(msg)
+                self.error.emit(msg)
+                return
+            sample = imread_gray(files[0])
+            full_shape = sample.shape
+            dm_raw = imread_gray(self.dm_path)
+            bm_raw = imread_gray(self.bm_path)
+            if self.dm_roi is not None:
+                x, y, w, h = self.dm_roi
+                dm = np.zeros(full_shape, dtype=dm_raw.dtype)
+                bm = np.zeros(full_shape, dtype=bm_raw.dtype)
+                dm[y:y + h, x:x + w] = dm_raw
+                bm[y:y + h, x:x + w] = bm_raw
+                roi = (x, y, w, h)
+            else:
+                dm = dm_raw
+                bm = bm_raw
+                roi = None
             self.imagePreviews.emit(dm, bm, dm)
             top_dir = self.out_dir / "top"
             topbw_dir = self.out_dir / "topBW"
@@ -164,12 +195,6 @@ class ProcessorWorker(QObject):
                 ensure_dir(d)
             binDif_top = cv2.subtract(dm, bm)
             binDif_bot = cv2.subtract(dm, complement(bm))
-            files = self.files
-            if not files:
-                msg = f"No image files found in {self.in_dir}"
-                logger.warning(msg)
-                self.error.emit(msg)
-                return
             total = len(files)
             top_xlsx = self.out_dir / "top.xlsx"
             bot_xlsx = self.out_dir / "bottom.xlsx"
@@ -203,6 +228,7 @@ class ProcessorWorker(QObject):
                         botbw_dir,
                         binDif_top,
                         binDif_bot,
+                        roi,
                     )
                     for idx, path in enumerate(files, start=1)
                 ]
