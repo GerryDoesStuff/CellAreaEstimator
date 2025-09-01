@@ -76,3 +76,40 @@ def test_process_file_with_roi(tmp_path):
     )
     assert topDiff.shape == (10, 10)
     assert botDiff.shape == (10, 10)
+
+
+def test_process_file_crops_to_mask(tmp_path):
+    full = load("roi_full.pgm")
+    dm_small = load("roi_dm.pgm")
+    bm_small = load("roi_bm.pgm")
+    roi = (5, 7, 8, 8)
+    dm = np.zeros_like(full)
+    bm = np.zeros_like(full)
+    x, y, w, h = roi
+    dm[y:y + h, x:x + w] = dm_small
+    bm[y:y + h, x:x + w] = bm_small
+    binDif_top = cv2.subtract(dm, bm)
+    binDif_bot = cv2.subtract(dm, complement(bm))
+    img_path = tmp_path / "cur.pgm"
+    cv2.imwrite(str(img_path), full)
+    top_dir = tmp_path / "top"; top_dir.mkdir()
+    topbw_dir = tmp_path / "topBW"; topbw_dir.mkdir()
+    bot_dir = tmp_path / "bottom"; bot_dir.mkdir()
+    botbw_dir = tmp_path / "bottomBW"; botbw_dir.mkdir()
+    params = RegSegParams(maxIter=50)
+    _, _, _, topDiff, botDiff, _, _ = _process_file(
+        1,
+        img_path,
+        dm,
+        bm,
+        params,
+        top_dir,
+        topbw_dir,
+        bot_dir,
+        botbw_dir,
+        binDif_top,
+        binDif_bot,
+        roi,
+    )
+    assert topDiff.shape == (h, w)
+    assert botDiff.shape == (h, w)
