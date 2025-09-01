@@ -131,11 +131,13 @@ def register_ecc(
     fixed: np.ndarray,
     params: RegSegParams,
     use_gpu: bool | None = None,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """Register *moving* to *fixed* using OpenCV ECC with an affine model.
 
-    If ``use_gpu`` is ``True`` (or ``None`` and CUDA is available), Gaussian blur and
-    affine warping are executed via :mod:`cv2.cuda` with automatic fallback to CPU.
+    Returns the registered image and a mask of valid (overlapping) pixels.  If
+    ``use_gpu`` is ``True`` (or ``None`` and CUDA is available), Gaussian blur and
+    affine warping are executed via :mod:`cv2.cuda` with automatic fallback to
+    CPU.
     """
     use_gpu = gpu_enabled(use_gpu)
     if params.gausBlurDif > 0:
@@ -165,7 +167,16 @@ def register_ecc(
         border_mode=cv2.BORDER_REPLICATE,
         use_gpu=use_gpu,
     )
-    return registered
+    mask = warp_affine(
+        np.ones_like(moving, dtype=np.uint8),
+        warp_matrix,
+        (w, h),
+        flags=cv2.INTER_NEAREST,
+        border_mode=cv2.BORDER_CONSTANT,
+        use_gpu=use_gpu,
+    )
+    mask = (mask > 0).astype(np.uint8)
+    return registered, mask
 
 
 def segment_image(
