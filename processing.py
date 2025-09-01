@@ -7,9 +7,22 @@ import cv2
 import numpy as np
 import logging
 
-from io_utils import to_uint8
-
 logger = logging.getLogger(__name__)
+
+try:
+    import cupy as cp  # noqa: F401  # Cupy may be used by future GPU extensions
+    CUPY_AVAILABLE = True
+except Exception as exc:  # pragma: no cover - best effort detection
+    logger.warning("cupy not available: %s", exc)
+    CUPY_AVAILABLE = False
+
+try:
+    CUDA_AVAILABLE = cv2.cuda.getCudaEnabledDeviceCount() > 0
+except Exception as exc:  # pragma: no cover - best effort detection
+    logger.warning("cv2.cuda not available: %s", exc)
+    CUDA_AVAILABLE = False
+
+from io_utils import to_uint8
 
 try:
     from skimage.segmentation import morphological_chan_vese
@@ -44,6 +57,48 @@ def ksize_from_sigma(sigma: float) -> int:
     return k if k % 2 == 1 else k + 1
 
 
+def gpu_enabled(use_gpu: bool | None = None) -> bool:
+    """Return True if GPU processing should be used."""
+    if use_gpu is None:
+        return CUDA_AVAILABLE
+    return bool(use_gpu and CUDA_AVAILABLE)
+
+
+def gaussian_blur(img: np.ndarray, ksize: int, sigma: float, use_gpu: bool | None = None) -> np.ndarray:
+    """Gaussian blur that optionally executes on the GPU."""
+    if ksize <= 0:
+        return img
+    if gpu_enabled(use_gpu):
+        try:
+            gpu = cv2.cuda_GpuMat()
+            gpu.upload(img)
+            blurred = cv2.cuda_GaussianBlur(gpu, (ksize, ksize), sigma)
+            return blurred.download()
+        except Exception as exc:  # pragma: no cover - fall back to CPU
+            logger.warning("CUDA GaussianBlur failed, falling back to CPU: %s", exc)
+    return cv2.GaussianBlur(img, (ksize, ksize), sigma)
+
+
+def warp_affine(
+    img: np.ndarray,
+    matrix: np.ndarray,
+    dsize: tuple[int, int],
+    flags: int,
+    border_mode: int,
+    use_gpu: bool | None = None,
+) -> np.ndarray:
+    """Affine warp that optionally executes on the GPU."""
+    if gpu_enabled(use_gpu):
+        try:
+            gpu = cv2.cuda_GpuMat()
+            gpu.upload(img)
+            warped = cv2.cuda.warpAffine(gpu, matrix, dsize, flags=flags, borderMode=border_mode)
+            return warped.download()
+        except Exception as exc:  # pragma: no cover - fall back to CPU
+            logger.warning("CUDA warpAffine failed, falling back to CPU: %s", exc)
+    return cv2.warpAffine(img, matrix, dsize, flags=flags, borderMode=border_mode)
+
+
 def clahe_equalize(img: np.ndarray) -> np.ndarray:
     """Apply contrast limited adaptive histogram equalization."""
     img8 = to_uint8(img)
@@ -56,16 +111,26 @@ def complement(img: np.ndarray) -> np.ndarray:
     return 255 - to_uint8(img)
 
 
-def register_ecc(moving: np.ndarray, fixed: np.ndarray, params: RegSegParams) -> np.ndarray:
-    """Register *moving* to *fixed* using OpenCV ECC with an affine model."""
+def register_ecc(
+    moving: np.ndarray,
+    fixed: np.ndarray,
+    params: RegSegParams,
+    use_gpu: bool | None = None,
+) -> np.ndarray:
+    """Register *moving* to *fixed* using OpenCV ECC with an affine model.
+
+    If ``use_gpu`` is ``True`` (or ``None`` and CUDA is available), Gaussian blur and
+    affine warping are executed via :mod:`cv2.cuda` with automatic fallback to CPU.
+    """
+    use_gpu = gpu_enabled(use_gpu)
     if params.gausBlurDif > 0:
         kf = ksize_from_sigma(params.gausBlurDif)
-        fixed_blur = cv2.GaussianBlur(fixed, (kf, kf), params.gausBlurDif) if kf > 0 else fixed
+        fixed_blur = gaussian_blur(fixed, kf, params.gausBlurDif, use_gpu) if kf > 0 else fixed
     else:
         fixed_blur = fixed
     if params.gausBlurIn > 0:
         km = ksize_from_sigma(params.gausBlurIn)
-        moving_blur = cv2.GaussianBlur(moving, (km, km), params.gausBlurIn) if km > 0 else moving
+        moving_blur = gaussian_blur(moving, km, params.gausBlurIn, use_gpu) if km > 0 else moving
     else:
         moving_blur = moving
     fb = to_uint8(fixed_blur).astype(np.float32) / 255.0
@@ -77,17 +142,47 @@ def register_ecc(moving: np.ndarray, fixed: np.ndarray, params: RegSegParams) ->
     except cv2.error as exc:
         logger.warning("ECC registration failed: %s", exc)
     h, w = fixed.shape
-    registered = cv2.warpAffine(moving, warp_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    registered = warp_affine(
+        moving,
+        warp_matrix,
+        (w, h),
+        flags=cv2.INTER_LINEAR,
+        border_mode=cv2.BORDER_REPLICATE,
+        use_gpu=use_gpu,
+    )
     return registered
 
 
-def segment_image(img: np.ndarray, params: RegSegParams) -> np.ndarray:
-    """Segment an image using thresholding, morphology and optional Chan–Vese."""
+def segment_image(
+    img: np.ndarray, params: RegSegParams, use_gpu: bool | None = None
+) -> np.ndarray:
+    """Segment an image using thresholding, morphology and optional Chan–Vese.
+
+    When ``use_gpu`` is ``True`` (or ``None`` and CUDA is available) thresholding and
+    morphology are attempted on the GPU with transparent fallback to CPU.
+    """
     g = to_uint8(img)
-    if params.bwThresh >= 0:
-        _, BW = cv2.threshold(g, int(params.bwThresh), 255, cv2.THRESH_BINARY)
+    use_gpu = gpu_enabled(use_gpu)
+    if use_gpu:
+        try:
+            g_gpu = cv2.cuda_GpuMat()
+            g_gpu.upload(g)
+            if params.bwThresh >= 0:
+                _, BW_gpu = cv2.cuda.threshold(g_gpu, float(int(params.bwThresh)), 255, cv2.THRESH_BINARY)
+            else:
+                _, BW_gpu = cv2.cuda.threshold(g_gpu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            BW = BW_gpu.download()
+        except Exception as exc:  # pragma: no cover - fall back to CPU
+            logger.warning("CUDA threshold failed, falling back to CPU: %s", exc)
+            if params.bwThresh >= 0:
+                _, BW = cv2.threshold(g, int(params.bwThresh), 255, cv2.THRESH_BINARY)
+            else:
+                _, BW = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     else:
-        _, BW = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if params.bwThresh >= 0:
+            _, BW = cv2.threshold(g, int(params.bwThresh), 255, cv2.THRESH_BINARY)
+        else:
+            _, BW = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     inv = 255 - BW
     h, w = inv.shape
     mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
@@ -98,7 +193,17 @@ def segment_image(img: np.ndarray, params: RegSegParams) -> np.ndarray:
     BW_filled[holes > 0] = 255
     k = max(1, int(params.recMaSize))
     rect = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
-    BW_open = cv2.morphologyEx(BW_filled, cv2.MORPH_OPEN, rect, iterations=1)
+    if use_gpu:
+        try:
+            bw_gpu = cv2.cuda_GpuMat()
+            bw_gpu.upload(BW_filled)
+            morph = cv2.cuda.createMorphologyFilter(cv2.MORPH_OPEN, bw_gpu.type(), rect)
+            BW_open = morph.apply(bw_gpu).download()
+        except Exception as exc:  # pragma: no cover - fall back to CPU
+            logger.warning("CUDA morphology failed, falling back to CPU: %s", exc)
+            BW_open = cv2.morphologyEx(BW_filled, cv2.MORPH_OPEN, rect, iterations=1)
+    else:
+        BW_open = cv2.morphologyEx(BW_filled, cv2.MORPH_OPEN, rect, iterations=1)
     if SKIMAGE_AVAILABLE and params.segIter > 0:
         img01 = g.astype(np.float32) / 255.0
         init_ls = BW_open.astype(bool)
