@@ -1,9 +1,16 @@
+import pytest
+
+pytest.importorskip("numpy")
+pytest.importorskip("cv2")
+pytest.importorskip("PyQt6")
+pytest.importorskip("openpyxl")
+
 import cv2
 import numpy as np
 from pathlib import Path
 
 import worker
-from worker import _apply_roi, _process_file
+from worker import _apply_roi, _process_file, ProcessorWorker
 from processing import RegSegParams, complement
 
 DATA = Path(__file__).parent / "data"
@@ -166,3 +173,39 @@ def test_process_file_complements_roi_only(tmp_path, monkeypatch):
     )
 
     assert shapes == [bm_small.shape]
+
+
+def test_worker_run_handles_roi(tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+    import json
+
+    app = QApplication.instance() or QApplication([])
+    dm_path = DATA / "syn_dm_ascii.pgm"
+    bm_path = DATA / "syn_bm_ascii.pgm"
+    with open(DATA / "syn_dm_ascii.json", "r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+    roi = (meta["offset"][0], meta["offset"][1], meta["size"][0], meta["size"][1])
+    full = load("syn_full_ascii.pgm")
+    img_path = tmp_path / "cur.pgm"
+    cv2.imwrite(str(img_path), full)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    captured: dict[str, tuple[int, int]] = {}
+
+    def fake_process_file(idx, path, dm, bm, params, top_dir, topbw_dir, bot_dir, botbw_dir, binDif_top, binDif_bot, roi_arg):
+        captured["dm_shape"] = dm.shape
+        captured["bm_shape"] = bm.shape
+        captured["roi"] = roi_arg
+        return idx, path.name, dm, dm, dm, [], []
+
+    monkeypatch.setattr(worker, "_process_file", fake_process_file)
+
+    params = RegSegParams(maxIter=1)
+    worker_obj = ProcessorWorker(tmp_path, out_dir, dm_path, bm_path, params, [img_path], dm_roi=roi)
+    worker_obj.run()
+
+    assert captured["dm_shape"] == full.shape
+    assert captured["bm_shape"] == full.shape
+    assert captured["roi"] == roi
+    app.quit()

@@ -1,3 +1,8 @@
+import pytest
+
+pytest.importorskip("cv2")
+pytest.importorskip("numpy")
+
 import cv2
 import numpy as np
 from pathlib import Path
@@ -50,6 +55,22 @@ def test_registration_with_roi():
     fixed_roi = fixed[2:12, 2:12]
     diff = cv2.subtract(fixed_roi, reg)
     assert diff.max() == 0
+
+
+def test_register_ecc_uses_roi_metadata():
+    import json
+    fixed = load("syn_full_ascii.pgm")
+    params = RegSegParams(maxIter=50)
+    with open(DATA / "syn_dm_ascii.json", "r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+    x, y = meta["offset"]
+    w, h = meta["size"]
+    roi = (x, y, w, h)
+    reg, mask = register_ecc(fixed, fixed, params, roi=roi)
+    assert reg.shape == (h, w)
+    assert mask.shape == (h, w)
+    assert mask.min() == 1 and mask.max() == 1
+    assert np.array_equal(reg, fixed[y:y + h, x:x + w])
 
 
 def test_load_dm_with_sidecar(tmp_path, monkeypatch):
