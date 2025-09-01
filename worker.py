@@ -45,23 +45,26 @@ def _process_file(
     botbw_dir: Path,
     binDif_top: np.ndarray,
     binDif_bot: np.ndarray,
-    roi: tuple[int, int, int, int] | None = None,
+    dm_roi: tuple[int, int, int, int] | None = None,
 ):
     """Process a single image file.
 
     Returns the index, filename, current image, and processing results.
     """
     cur = imread_gray(path)
-    reg, mask = register_ecc(cur, dm, params, roi=roi)
-    if roi is not None:
-        x, y, w, h = roi
+    if dm_roi is not None:
+        x, y, w, h = dm_roi
+        cur_roi = cur[y:y + h, x:x + w]
+        dm_crop = dm[y:y + h, x:x + w]
         bm_roi = bm[y:y + h, x:x + w]
         binDif_top_roi = binDif_top[y:y + h, x:x + w]
         binDif_bot_roi = binDif_bot[y:y + h, x:x + w]
+        reg, mask = register_ecc(cur_roi, dm_crop, params)
     else:
         bm_roi = bm
         binDif_top_roi = binDif_top
         binDif_bot_roi = binDif_bot
+        reg, mask = register_ecc(cur, dm, params)
     reg = reg * mask
     binDif_top_masked = binDif_top_roi * mask
     binDif_bot_masked = binDif_bot_roi * mask
@@ -84,7 +87,7 @@ def _process_file(
     cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
     areas_top = connected_component_areas(topBW)
     areas_top.sort(reverse=True)
-    comp_bm_crop = complement(bm)[y1:y2, x1:x2]
+    comp_bm_crop = complement(bm_roi)[y1:y2, x1:x2]
     binReg_bot = cv2.subtract(reg, comp_bm_crop)
     botDiff = cv2.subtract(clahe_equalize(binDif_bot_crop), clahe_equalize(binReg_bot))
     botDiff = botDiff * mask_crop
@@ -181,11 +184,9 @@ class ProcessorWorker(QObject):
                 bm = np.zeros(full_shape, dtype=bm_raw.dtype)
                 dm[y:y + h, x:x + w] = dm_raw
                 bm[y:y + h, x:x + w] = bm_raw
-                roi = (x, y, w, h)
             else:
                 dm = dm_raw
                 bm = bm_raw
-                roi = None
             self.imagePreviews.emit(dm, bm, dm)
             top_dir = self.out_dir / "top"
             topbw_dir = self.out_dir / "topBW"
@@ -228,7 +229,7 @@ class ProcessorWorker(QObject):
                         botbw_dir,
                         binDif_top,
                         binDif_bot,
-                        roi,
+                        self.dm_roi,
                     )
                     for idx, path in enumerate(files, start=1)
                 ]

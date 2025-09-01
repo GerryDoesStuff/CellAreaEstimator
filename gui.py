@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import logging
 from typing import Optional
+import json
 
 import numpy as np
 import cv2
@@ -166,6 +167,7 @@ class MaskPrepDialog(QDialog):
         self.dm: Optional[np.ndarray] = None
         self.dm_path: Optional[Path] = None
         self.bm_path: Optional[Path] = None
+        self.dm_roi: Optional[tuple[int, int, int, int]] = None
         load_layout = QHBoxLayout()
         self.btn_load_a = QPushButton("Load Image A")
         self.btn_load_b = QPushButton("Load Image B")
@@ -200,6 +202,20 @@ class MaskPrepDialog(QDialog):
         self.btn_save_bm.clicked.connect(self.save_bm)
         close_btn.clicked.connect(self.accept)
 
+    def _compute_roi(self, mask: np.ndarray) -> tuple[int, int, int, int]:
+        ys, xs = np.nonzero(mask)
+        if ys.size == 0 or xs.size == 0:
+            h, w = mask.shape
+            return 0, 0, w, h
+        x1, x2 = xs.min(), xs.max() + 1
+        y1, y2 = ys.min(), ys.max() + 1
+        return int(x1), int(y1), int(x2 - x1), int(y2 - y1)
+
+    def _save_sidecar(self, base: Path, roi: tuple[int, int, int, int]) -> None:
+        sidecar = base.with_suffix(base.suffix + ".json")
+        with sidecar.open("w", encoding="utf-8") as fh:
+            json.dump({"roi": roi}, fh)
+
     def load_img_a(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select Baseline Image A", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)")
         if path:
@@ -224,20 +240,31 @@ class MaskPrepDialog(QDialog):
         if self.dm is None:
             QMessageBox.warning(self, "No DM", "Compute the difference mask first.")
             return
+        mask = self.draw.get_mask()
+        roi = self._compute_roi(mask)
+        x, y, w, h = roi
+        dm_crop = self.dm[y:y + h, x:x + w]
         path, _ = QFileDialog.getSaveFileName(self, "Save Difference Mask", "dm.png", "Images (*.png *.jpg *.tif *.tiff)")
         if path:
-            cv2.imwrite(path, self.dm)
+            cv2.imwrite(path, dm_crop)
             self.dm_path = Path(path)
+            self.dm_roi = roi
+            self._save_sidecar(self.dm_path, roi)
 
     def save_bm(self) -> None:
         mask = self.draw.get_mask()
         if mask.size == 1:
             QMessageBox.warning(self, "No BM", "Draw on the difference mask to create a binary mask.")
             return
+        roi = self._compute_roi(mask)
+        x, y, w, h = roi
+        bm_crop = mask[y:y + h, x:x + w]
         path, _ = QFileDialog.getSaveFileName(self, "Save Binary Mask", "bm.png", "Images (*.png *.jpg *.tif *.tiff)")
         if path:
-            cv2.imwrite(path, mask)
+            cv2.imwrite(path, bm_crop)
             self.bm_path = Path(path)
+            self.dm_roi = roi
+            self._save_sidecar(self.bm_path, roi)
 
 
 class MainWindow(QMainWindow):
@@ -247,6 +274,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Cell Area Estimator (PyQt6)")
         self.params = RegSegParams()
+        self.dm_roi: Optional[tuple[int, int, int, int]] = None
         menubar = self.menuBar()
         tools_menu = menubar.addMenu("Tools")
         params_action = QAction("Registration/Segmentation Setup", self)
@@ -323,6 +351,7 @@ class MainWindow(QMainWindow):
             if dlg.dm_path and dlg.dm is not None:
                 self.dm_path.setText(str(dlg.dm_path))
                 self.set_label_image(self.img_dm, dlg.dm)
+                self.dm_roi = dlg.dm_roi
             if dlg.bm_path:
                 bm = imread_gray(dlg.bm_path)
                 self.bm_path.setText(str(dlg.bm_path))
@@ -335,6 +364,14 @@ class MainWindow(QMainWindow):
             try:
                 im = imread_gray(Path(path))
                 self.set_label_image(self.img_dm, im)
+                self.dm_roi = None
+                sidecar = Path(path).with_suffix(Path(path).suffix + ".json")
+                if sidecar.exists():
+                    with sidecar.open("r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                        roi = data.get("roi")
+                        if roi and len(roi) == 4:
+                            self.dm_roi = tuple(int(v) for v in roi)
                 logger.info("Loaded difference mask from %s", path)
             except Exception as exc:
                 logger.error("Failed to load difference mask", exc_info=exc)
@@ -379,7 +416,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         logger.info("Starting processing for %d images in %s", len(files), in_dir)
         self.worker_thread = QThread()
-        self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params, files)
+        self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params, files, dm_roi=self.dm_roi)
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.worker_thread.quit)
