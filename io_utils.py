@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import List
 
 import cv2
@@ -9,9 +9,9 @@ from openpyxl import Workbook, load_workbook
 from PyQt6.QtGui import QImage
 
 
-def imread_gray(path: str) -> np.ndarray:
+def imread_gray(path: Path | str) -> np.ndarray:
     """Read an image from *path* and ensure it is grayscale."""
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise IOError(f"Failed to read image: {path}")
     if img.ndim == 3:
@@ -38,12 +38,12 @@ def qimage_from_gray(img: np.ndarray) -> QImage:
     return QImage(g.data, w, h, w, QImage.Format.Format_Grayscale8)
 
 
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
 
 
-def list_jpgs(folder: str) -> List[str]:
-    return [f for f in os.listdir(folder) if f.lower().endswith('.jpg')]
+def list_jpgs(folder: Path) -> List[Path]:
+    return [p for p in folder.iterdir() if p.suffix.lower() == ".jpg"]
 
 
 def num2xlcol(col_num: int) -> str:
@@ -56,9 +56,9 @@ def num2xlcol(col_num: int) -> str:
     return ''.join(reversed(col_chars))
 
 
-def write_sorted_areas_xlsx(xlsx_path: str, column_index: int, areas: List[int]) -> None:
+def write_sorted_areas_xlsx(xlsx_path: Path, column_index: int, areas: List[int]) -> None:
     """Write a list of integer areas into *xlsx_path* at column *column_index* (1‑based)."""
-    if os.path.exists(xlsx_path):
+    if xlsx_path.exists():
         wb = load_workbook(xlsx_path)
         ws = wb.active
     else:

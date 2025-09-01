@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 import time
 from typing import Optional
 
@@ -35,7 +35,7 @@ class ProcessorWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, in_dir: str, out_dir: str, dm_path: str, bm_path: str, params: RegSegParams):
+    def __init__(self, in_dir: Path, out_dir: Path, dm_path: Path, bm_path: Path, params: RegSegParams):
         super().__init__()
         self.in_dir = in_dir
         self.out_dir = out_dir
@@ -64,10 +64,10 @@ class ProcessorWorker(QObject):
             dm = imread_gray(self.dm_path)
             bm = imread_gray(self.bm_path)
             self.imagePreviews.emit(dm, bm, dm)
-            top_dir = os.path.join(self.out_dir, "top")
-            topbw_dir = os.path.join(self.out_dir, "topBW")
-            bot_dir = os.path.join(self.out_dir, "bottom")
-            botbw_dir = os.path.join(self.out_dir, "bottomBW")
+            top_dir = self.out_dir / "top"
+            topbw_dir = self.out_dir / "topBW"
+            bot_dir = self.out_dir / "bottom"
+            botbw_dir = self.out_dir / "bottomBW"
             for d in (top_dir, topbw_dir, bot_dir, botbw_dir):
                 ensure_dir(d)
             binDif_top = cv2.subtract(dm, bm)
@@ -78,30 +78,29 @@ class ProcessorWorker(QObject):
                 self.finished.emit()
                 return
             total = len(files)
-            top_xlsx = os.path.join(self.out_dir, "top.xlsx")
-            bot_xlsx = os.path.join(self.out_dir, "bottom.xlsx")
-            for idx, fname in enumerate(files, start=1):
+            top_xlsx = self.out_dir / "top.xlsx"
+            bot_xlsx = self.out_dir / "bottom.xlsx"
+            for idx, path in enumerate(files, start=1):
                 self._check_pause_stop()
-                self.status.emit(f"Processing {idx}/{total}: {fname}")
-                path = os.path.join(self.in_dir, fname)
+                self.status.emit(f"Processing {idx}/{total}: {path.name}")
                 cur = imread_gray(path)
                 self.imagePreviews.emit(dm, bm, cur)
                 reg = register_ecc(cur, dm, self.params)
                 binReg_top = cv2.subtract(reg, bm)
                 topDiff = cv2.subtract(clahe_equalize(binDif_top), clahe_equalize(binReg_top))
                 self.diffPreviews.emit(topDiff, topDiff)
-                cv2.imwrite(os.path.join(top_dir, fname), to_uint8(topDiff))
+                cv2.imwrite(str(top_dir / path.name), to_uint8(topDiff))
                 topBW = segment_image(topDiff, self.params)
-                cv2.imwrite(os.path.join(topbw_dir, fname), to_uint8(topBW))
+                cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
                 areas_top = connected_component_areas(topBW)
                 areas_top.sort(reverse=True)
                 write_sorted_areas_xlsx(top_xlsx, idx, areas_top)
                 binReg_bot = cv2.subtract(reg, complement(bm))
                 botDiff = cv2.subtract(clahe_equalize(binDif_bot), clahe_equalize(binReg_bot))
                 self.diffPreviews.emit(topDiff, botDiff)
-                cv2.imwrite(os.path.join(bot_dir, fname), to_uint8(botDiff))
+                cv2.imwrite(str(bot_dir / path.name), to_uint8(botDiff))
                 botBW = segment_image(botDiff, self.params)
-                cv2.imwrite(os.path.join(botbw_dir, fname), to_uint8(botBW))
+                cv2.imwrite(str(botbw_dir / path.name), to_uint8(botBW))
                 areas_bot = connected_component_areas(botBW)
                 areas_bot.sort(reverse=True)
                 write_sorted_areas_xlsx(bot_xlsx, idx, areas_bot)

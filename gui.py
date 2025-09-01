@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -161,7 +161,7 @@ class MainWindow(QMainWindow):
         if path:
             self.dm_path.setText(path)
             try:
-                im = imread_gray(path)
+                im = imread_gray(Path(path))
                 self.set_label_image(self.img_dm, im)
             except Exception as exc:
                 QMessageBox.critical(self, "Error", str(exc))
@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
         if path:
             self.bm_path.setText(path)
             try:
-                im = imread_gray(path)
+                im = imread_gray(Path(path))
                 self.set_label_image(self.img_bm, im)
             except Exception as exc:
                 QMessageBox.critical(self, "Error", str(exc))
@@ -187,11 +187,11 @@ class MainWindow(QMainWindow):
             self.out_path.setText(directory)
 
     def start_processing(self) -> None:
-        in_dir = self.in_path.text().strip()
-        out_dir = self.out_path.text().strip()
-        dm = self.dm_path.text().strip()
-        bm = self.bm_path.text().strip()
-        if not (os.path.isdir(in_dir) and os.path.isdir(out_dir) and os.path.isfile(dm) and os.path.isfile(bm)):
+        in_dir = Path(self.in_path.text().strip())
+        out_dir = Path(self.out_path.text().strip())
+        dm = Path(self.dm_path.text().strip())
+        bm = Path(self.bm_path.text().strip())
+        if not (in_dir.is_dir() and out_dir.is_dir() and dm.is_file() and bm.is_file()):
             QMessageBox.warning(self, "Missing Input", "Please provide valid DM, BM, input directory and output directory.")
             return
         self.progress_bar.setValue(0)
