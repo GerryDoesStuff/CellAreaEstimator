@@ -180,13 +180,20 @@ def register_ecc(
 
 
 def segment_image(
-    img: np.ndarray, params: RegSegParams, use_gpu: bool | None = None
+    img: np.ndarray,
+    params: RegSegParams,
+    mask: np.ndarray | None = None,
+    use_gpu: bool | None = None,
 ) -> np.ndarray:
     """Segment an image using thresholding, morphology and optional Chan–Vese.
 
     When ``use_gpu`` is ``True`` (or ``None`` and CUDA is available) thresholding and
-    morphology are attempted on the GPU with transparent fallback to CPU.
+    morphology are attempted on the GPU with transparent fallback to CPU.  If
+    ``mask`` is provided, both the input and output are restricted to its
+    non-zero region.
     """
+    if mask is not None:
+        img = img * (mask > 0).astype(img.dtype)
     g = to_uint8(img)
     use_gpu = gpu_enabled(use_gpu)
     if use_gpu:
@@ -211,9 +218,9 @@ def segment_image(
             _, BW = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     inv = 255 - BW
     h, w = inv.shape
-    mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+    ff_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
     flood = inv.copy()
-    cv2.floodFill(flood, mask, (0, 0), 0)
+    cv2.floodFill(flood, ff_mask, (0, 0), 0)
     holes = inv - flood
     BW_filled = BW.copy()
     BW_filled[holes > 0] = 255
@@ -237,6 +244,8 @@ def segment_image(
         BW_refined = (cv_res.astype(np.uint8) * 255)
     else:
         BW_refined = BW_open
+    if mask is not None:
+        BW_refined = BW_refined * (mask > 0).astype(BW_refined.dtype)
     return BW_refined
 
 
