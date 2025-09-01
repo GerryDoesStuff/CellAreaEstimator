@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 
-from worker import _process_file
+from worker import _apply_roi, _process_file
 from processing import RegSegParams, complement
 
 DATA = Path(__file__).parent / "data"
@@ -10,6 +10,36 @@ DATA = Path(__file__).parent / "data"
 
 def load(name: str):
     return cv2.imread(str(DATA / name), cv2.IMREAD_UNCHANGED)
+
+
+def test_apply_roi_with_roi():
+    arr = np.arange(16, dtype=np.uint8).reshape(4, 4)
+    dm = arr + 1
+    bm = arr + 2
+    top = arr + 3
+    bot = arr + 4
+    roi = (1, 1, 2, 2)
+    cur_c, dm_c, bm_c, top_c, bot_c = _apply_roi(arr, dm, bm, top, bot, roi)
+    expected = arr[1:3, 1:3]
+    assert np.array_equal(cur_c, expected)
+    assert np.array_equal(dm_c, dm[1:3, 1:3])
+    assert np.array_equal(bm_c, bm[1:3, 1:3])
+    assert np.array_equal(top_c, top[1:3, 1:3])
+    assert np.array_equal(bot_c, bot[1:3, 1:3])
+
+
+def test_apply_roi_without_roi():
+    arr = np.arange(9, dtype=np.uint8).reshape(3, 3)
+    dm = arr + 1
+    bm = arr + 2
+    top = arr + 3
+    bot = arr + 4
+    cur_c, dm_c, bm_c, top_c, bot_c = _apply_roi(arr, dm, bm, top, bot, None)
+    assert np.array_equal(cur_c, arr)
+    assert np.array_equal(dm_c, dm)
+    assert np.array_equal(bm_c, bm)
+    assert np.array_equal(top_c, top)
+    assert np.array_equal(bot_c, bot)
 
 
 def test_process_file_with_roi(tmp_path):
