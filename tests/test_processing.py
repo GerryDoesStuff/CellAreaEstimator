@@ -84,3 +84,17 @@ def test_load_dm_with_sidecar(tmp_path, monkeypatch):
     dm_path.unlink()
     dm_path.with_suffix(".json").unlink()
     app.quit()
+
+
+def test_register_ecc_matches_roi_dataset():
+    full = load("roi_full.pgm")
+    dm_small = load("roi_dm.pgm")
+    roi = (5, 7, 8, 8)
+    dm_full = np.zeros_like(full)
+    x, y, w, h = roi
+    dm_full[y:y + h, x:x + w] = dm_small
+    params = RegSegParams(maxIter=50)
+    reg, mask = register_ecc(full, dm_full, params, roi=roi)
+    assert mask.shape == (h, w)
+    assert mask.min() == 1 and mask.max() == 1
+    assert np.array_equal(reg, full[y:y + h, x:x + w])
