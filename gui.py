@@ -5,8 +5,9 @@ import logging
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtCore import Qt, QThread, pyqtSlot
-from PyQt6.QtGui import QPixmap
+import cv2
+from PyQt6.QtCore import Qt, QThread, pyqtSlot, QPoint, QRect
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
 from PyQt6.QtWidgets import (
     QAction,
     QCheckBox,
@@ -23,11 +24,12 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from processing import RegSegParams
+from processing import RegSegParams, difference_mask, mask_from_rects
 from worker import ProcessorWorker
 from io_utils import imread_gray, qimage_from_gray, list_jpgs
 
@@ -89,6 +91,155 @@ class ParamDialog(QDialog):
         self.params.segIter = int(self.sp_segIter.value())
 
 
+class DrawLabel(QLabel):
+    """Label widget allowing rectangular drawing to create a binary mask."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.base_pix: Optional[QPixmap] = None
+        self.rects: list[QRect] = []
+        self.drawing = False
+        self.start_pos: Optional[QPoint] = None
+        self.end_pos: Optional[QPoint] = None
+
+    def load_image(self, img: np.ndarray) -> None:
+        qimg = qimage_from_gray(img)
+        pix = QPixmap.fromImage(qimg)
+        self.base_pix = pix
+        self.setPixmap(pix)
+        self.setFixedSize(pix.size())
+        self.rects.clear()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton and self.base_pix is not None:
+            self.drawing = True
+            self.start_pos = event.position().toPoint()
+            self.end_pos = self.start_pos
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self.drawing:
+            self.end_pos = event.position().toPoint()
+            self._update_display(temp=True)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton and self.drawing:
+            self.drawing = False
+            if self.start_pos and self.end_pos:
+                rect = QRect(self.start_pos, self.end_pos).normalized()
+                self.rects.append(rect)
+            self._update_display(temp=False)
+
+    def _update_display(self, temp: bool) -> None:
+        if self.base_pix is None:
+            return
+        pix = self.base_pix.copy()
+        painter = QPainter(pix)
+        pen = QPen(Qt.GlobalColor.red)
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.setBrush(QColor(255, 0, 0, 80))
+        for r in self.rects:
+            painter.drawRect(r)
+        if temp and self.start_pos and self.end_pos:
+            painter.drawRect(QRect(self.start_pos, self.end_pos).normalized())
+        painter.end()
+        self.setPixmap(pix)
+
+    def get_mask(self) -> np.ndarray:
+        if self.base_pix is None:
+            return np.zeros((1, 1), dtype=np.uint8)
+        h = self.base_pix.height()
+        w = self.base_pix.width()
+        rect_list = [(r.x(), r.y(), r.width(), r.height()) for r in self.rects]
+        return mask_from_rects((h, w), rect_list)
+
+
+class MaskPrepDialog(QDialog):
+    """Dialog to prepare difference and binary masks from baseline images."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Mask Preparation")
+        self.img_a: Optional[np.ndarray] = None
+        self.img_b: Optional[np.ndarray] = None
+        self.dm: Optional[np.ndarray] = None
+        self.dm_path: Optional[Path] = None
+        self.bm_path: Optional[Path] = None
+        load_layout = QHBoxLayout()
+        self.btn_load_a = QPushButton("Load Image A")
+        self.btn_load_b = QPushButton("Load Image B")
+        self.btn_compute = QPushButton("Compute DM")
+        load_layout.addWidget(self.btn_load_a)
+        load_layout.addWidget(self.btn_load_b)
+        load_layout.addWidget(self.btn_compute)
+        self.lbl_a = QLabel(); self.lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_b = QLabel(); self.lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_dm = QLabel(); self.lbl_dm.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.draw = DrawLabel()
+        save_layout = QHBoxLayout()
+        self.btn_save_dm = QPushButton("Save DM")
+        self.btn_save_bm = QPushButton("Save BM")
+        save_layout.addWidget(self.btn_save_dm)
+        save_layout.addWidget(self.btn_save_bm)
+        close_layout = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        close_layout.addWidget(close_btn)
+        vbox = QVBoxLayout(self)
+        vbox.addLayout(load_layout)
+        vbox.addWidget(self.lbl_a)
+        vbox.addWidget(self.lbl_b)
+        vbox.addWidget(self.lbl_dm)
+        vbox.addWidget(self.draw)
+        vbox.addLayout(save_layout)
+        vbox.addLayout(close_layout)
+        self.btn_load_a.clicked.connect(self.load_img_a)
+        self.btn_load_b.clicked.connect(self.load_img_b)
+        self.btn_compute.clicked.connect(self.compute_dm)
+        self.btn_save_dm.clicked.connect(self.save_dm)
+        self.btn_save_bm.clicked.connect(self.save_bm)
+        close_btn.clicked.connect(self.accept)
+
+    def load_img_a(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select Baseline Image A", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)")
+        if path:
+            self.img_a = imread_gray(path)
+            self.lbl_a.setPixmap(QPixmap.fromImage(qimage_from_gray(self.img_a)))
+
+    def load_img_b(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select Baseline Image B", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)")
+        if path:
+            self.img_b = imread_gray(path)
+            self.lbl_b.setPixmap(QPixmap.fromImage(qimage_from_gray(self.img_b)))
+
+    def compute_dm(self) -> None:
+        if self.img_a is None or self.img_b is None:
+            QMessageBox.warning(self, "Missing Images", "Please load both baseline images first.")
+            return
+        self.dm = difference_mask(self.img_a, self.img_b)
+        self.lbl_dm.setPixmap(QPixmap.fromImage(qimage_from_gray(self.dm)))
+        self.draw.load_image(self.dm)
+
+    def save_dm(self) -> None:
+        if self.dm is None:
+            QMessageBox.warning(self, "No DM", "Compute the difference mask first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Difference Mask", "dm.png", "Images (*.png *.jpg *.tif *.tiff)")
+        if path:
+            cv2.imwrite(path, self.dm)
+            self.dm_path = Path(path)
+
+    def save_bm(self) -> None:
+        mask = self.draw.get_mask()
+        if mask.size == 1:
+            QMessageBox.warning(self, "No BM", "Draw on the difference mask to create a binary mask.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Binary Mask", "bm.png", "Images (*.png *.jpg *.tif *.tiff)")
+        if path:
+            cv2.imwrite(path, mask)
+            self.bm_path = Path(path)
+
+
 class MainWindow(QMainWindow):
     """The main window of the cell area estimator."""
 
@@ -101,6 +252,13 @@ class MainWindow(QMainWindow):
         params_action = QAction("Registration/Segmentation Setup", self)
         tools_menu.addAction(params_action)
         params_action.triggered.connect(self.open_param_dialog)
+        mask_action = QAction("Prepare Masks", self)
+        tools_menu.addAction(mask_action)
+        mask_action.triggered.connect(self.open_mask_prep_dialog)
+        toolbar = QToolBar("Tools", self)
+        self.addToolBar(toolbar)
+        toolbar.addAction(params_action)
+        toolbar.addAction(mask_action)
         self.dm_label = QLabel("Difference Mask:")
         self.dm_path = QLineEdit(); self.dm_path.setReadOnly(True)
         self.btn_dm = QPushButton("Load DM"); self.btn_dm.clicked.connect(self.load_dm)
@@ -158,6 +316,17 @@ class MainWindow(QMainWindow):
         dlg = ParamDialog(self.params, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             dlg.apply()
+
+    def open_mask_prep_dialog(self) -> None:
+        dlg = MaskPrepDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            if dlg.dm_path and dlg.dm is not None:
+                self.dm_path.setText(str(dlg.dm_path))
+                self.set_label_image(self.img_dm, dlg.dm)
+            if dlg.bm_path:
+                bm = imread_gray(dlg.bm_path)
+                self.bm_path.setText(str(dlg.bm_path))
+                self.set_label_image(self.img_bm, bm)
 
     def load_dm(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select Difference Mask", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)")
