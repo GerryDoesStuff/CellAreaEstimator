@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
-import time
-from typing import Optional
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import (
+    QObject,
+    pyqtSignal,
+    pyqtSlot,
+    QMutex,
+    QWaitCondition,
+)
 
 from io_utils import (
     imread_gray,
@@ -44,18 +48,38 @@ class ProcessorWorker(QObject):
         self.params = params
         self._stop = False
         self._pause = False
+        self._mutex = QMutex()
+        self._wait_condition = QWaitCondition()
 
     def stop(self) -> None:
-        self._stop = True
+        """Request the worker thread to stop processing."""
+        self._mutex.lock()
+        try:
+            self._stop = True
+            self._wait_condition.wakeAll()
+        finally:
+            self._mutex.unlock()
 
     def toggle_pause(self, value: bool) -> None:
-        self._pause = value
+        """Pause or resume processing."""
+        self._mutex.lock()
+        try:
+            self._pause = value
+            if not self._pause:
+                self._wait_condition.wakeAll()
+        finally:
+            self._mutex.unlock()
 
     def _check_pause_stop(self) -> None:
-        while self._pause and not self._stop:
-            time.sleep(0.2)
-        if self._stop:
-            raise RuntimeError("Processing stopped by user.")
+        """Wait while paused and raise if a stop was requested."""
+        self._mutex.lock()
+        try:
+            while self._pause and not self._stop:
+                self._wait_condition.wait(self._mutex)
+            if self._stop:
+                raise RuntimeError("Processing stopped by user.")
+        finally:
+            self._mutex.unlock()
 
     @pyqtSlot()
     def run(self) -> None:
