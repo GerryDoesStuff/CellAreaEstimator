@@ -182,6 +182,10 @@ class MaskPrepDialog(QDialog):
         self.dm: Optional[np.ndarray] = None
         self.dm_path: Optional[Path] = None
         self.bm_path: Optional[Path] = None
+        # Bounding box of the ROI selected during mask creation.  This is
+        # propagated back to the main window so that processing can crop to the
+        # same region even if the difference mask itself is not saved.
+        self.dm_roi: Optional[tuple[int, int, int, int]] = None
         load_layout = QHBoxLayout()
         self.btn_load_a = QPushButton("Load Image A")
         self.btn_load_b = QPushButton("Load Image B")
@@ -267,6 +271,10 @@ class MaskPrepDialog(QDialog):
             self._save_sidecar(meta_path, meta)
             self.dm_path = Path(path)
             self.dm = dm_crop
+            # Persist the ROI so it can be used downstream even without a DM
+            # path.  ``roi`` is in absolute coordinates relative to the
+            # original baseline images.
+            self.dm_roi = (int(x), int(y), int(w), int(h))
 
     def save_bm(self) -> None:
         mask = self.draw.get_mask()
@@ -292,6 +300,9 @@ class MaskPrepDialog(QDialog):
                         meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
                         self._save_sidecar(meta_path, meta)
             self.bm_path = Path(path)
+            # ``save_bm`` may be invoked without saving a DM.  Preserve the ROI
+            # so the main window can still crop correctly during processing.
+            self.dm_roi = (int(x), int(y), int(w), int(h))
 
 
 class MainWindow(QMainWindow):
@@ -375,6 +386,12 @@ class MainWindow(QMainWindow):
     def open_mask_prep_dialog(self) -> None:
         dlg = MaskPrepDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            # Always carry over the ROI if the dialog produced one, even if the
+            # difference mask itself was not saved.  ``dlg.dm_roi`` is populated
+            # when either mask is written to disk and represents the crop
+            # applied to both DM and BM.
+            if getattr(dlg, "dm_roi", None) is not None:
+                self.dm_roi = dlg.dm_roi
             if dlg.dm_path and dlg.dm is not None:
                 self.dm_path.setText(str(dlg.dm_path))
                 self.set_label_image(self.img_dm, dlg.dm)
@@ -457,11 +474,20 @@ class MainWindow(QMainWindow):
     def start_processing(self) -> None:
         in_dir = Path(self.in_path.text().strip())
         out_dir = Path(self.out_path.text().strip())
-        dm = Path(self.dm_path.text().strip())
+        dm_text = self.dm_path.text().strip()
+        dm = Path(dm_text) if dm_text else None
         bm = Path(self.bm_path.text().strip())
-        if not (in_dir.is_dir() and out_dir.is_dir() and dm.is_file() and bm.is_file()):
-            QMessageBox.warning(self, "Missing Input", "Please provide valid DM, BM, input directory and output directory.")
+        if not (in_dir.is_dir() and out_dir.is_dir() and bm.is_file()):
+            QMessageBox.warning(
+                self,
+                "Missing Input",
+                "Please provide valid BM, input directory and output directory.",
+            )
             logger.warning("Missing input paths: dm=%s bm=%s in=%s out=%s", dm, bm, in_dir, out_dir)
+            return
+        if dm is not None and not dm.is_file():
+            QMessageBox.warning(self, "Missing Input", "Difference mask path is invalid.")
+            logger.warning("Invalid DM path: %s", dm)
             return
         files = list_jpgs(in_dir)
         if not files:
