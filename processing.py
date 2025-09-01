@@ -5,13 +5,17 @@ from typing import List
 
 import cv2
 import numpy as np
+import logging
 
 from io_utils import to_uint8
+
+logger = logging.getLogger(__name__)
 
 try:
     from skimage.segmentation import morphological_chan_vese
     SKIMAGE_AVAILABLE = True
-except Exception:
+except Exception as exc:
+    logger.warning("skimage not available; Chan–Vese segmentation disabled: %s", exc)
     SKIMAGE_AVAILABLE = False
 
 
@@ -70,8 +74,8 @@ def register_ecc(moving: np.ndarray, fixed: np.ndarray, params: RegSegParams) ->
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, params.maxIter, params.epsilon)
     try:
         cv2.findTransformECC(fb, mb, warp_matrix, cv2.MOTION_AFFINE, criteria)
-    except cv2.error:
-        pass
+    except cv2.error as exc:
+        logger.warning("ECC registration failed: %s", exc)
     h, w = fixed.shape
     registered = cv2.warpAffine(moving, warp_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
     return registered
