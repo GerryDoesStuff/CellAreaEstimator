@@ -203,10 +203,14 @@ class MainWindow(QMainWindow):
             logger.warning("Missing input paths: dm=%s bm=%s in=%s out=%s", dm, bm, in_dir, out_dir)
             return
         files = list_jpgs(in_dir)
+        if not files:
+            QMessageBox.warning(self, "No Images", f"No image files found in {in_dir}")
+            logger.warning("No image files found in %s", in_dir)
+            return
         self.progress_bar.setValue(0)
         logger.info("Starting processing for %d images in %s", len(files), in_dir)
         self.worker_thread = QThread()
-        self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params)
+        self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params, files)
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.worker_thread.quit)
