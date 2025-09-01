@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import List
 
 import cv2
@@ -12,9 +12,9 @@ from PyQt6.QtGui import QImage
 logger = logging.getLogger(__name__)
 
 
-def imread_gray(path: str) -> np.ndarray:
+def imread_gray(path: Path | str) -> np.ndarray:
     """Read an image from *path* and ensure it is grayscale."""
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
         logger.error("Failed to read image: %s", path)
         raise IOError(f"Failed to read image: {path}")
@@ -63,9 +63,9 @@ def num2xlcol(col_num: int) -> str:
     return ''.join(reversed(col_chars))
 
 
-def write_sorted_areas_xlsx(xlsx_path: str, column_index: int, areas: List[int]) -> None:
+def write_sorted_areas_xlsx(xlsx_path: Path, column_index: int, areas: List[int]) -> None:
     """Write a list of integer areas into *xlsx_path* at column *column_index* (1‑based)."""
-    if os.path.exists(xlsx_path):
+    if xlsx_path.exists():
         wb = load_workbook(xlsx_path)
         ws = wb.active
     else:

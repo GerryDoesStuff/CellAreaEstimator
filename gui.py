@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
 import os
 import logging
-from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import Qt, QThread, pyqtSlot
@@ -164,7 +166,7 @@ class MainWindow(QMainWindow):
         if path:
             self.dm_path.setText(path)
             try:
-                im = imread_gray(path)
+                im = imread_gray(Path(path))
                 self.set_label_image(self.img_dm, im)
                 logger.info("Loaded difference mask from %s", path)
             except Exception as exc:
@@ -176,7 +178,7 @@ class MainWindow(QMainWindow):
         if path:
             self.bm_path.setText(path)
             try:
-                im = imread_gray(path)
+                im = imread_gray(Path(path))
                 self.set_label_image(self.img_bm, im)
                 logger.info("Loaded binary mask from %s", path)
             except Exception as exc:
@@ -194,11 +196,11 @@ class MainWindow(QMainWindow):
             self.out_path.setText(directory)
 
     def start_processing(self) -> None:
-        in_dir = self.in_path.text().strip()
-        out_dir = self.out_path.text().strip()
-        dm = self.dm_path.text().strip()
-        bm = self.bm_path.text().strip()
-        if not (os.path.isdir(in_dir) and os.path.isdir(out_dir) and os.path.isfile(dm) and os.path.isfile(bm)):
+        in_dir = Path(self.in_path.text().strip())
+        out_dir = Path(self.out_path.text().strip())
+        dm = Path(self.dm_path.text().strip())
+        bm = Path(self.bm_path.text().strip())
+        if not (in_dir.is_dir() and out_dir.is_dir() and dm.is_file() and bm.is_file()):
             QMessageBox.warning(self, "Missing Input", "Please provide valid DM, BM, input directory and output directory.")
             logger.warning("Missing input paths: dm=%s bm=%s in=%s out=%s", dm, bm, in_dir, out_dir)
             return
