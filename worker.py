@@ -65,18 +65,21 @@ def _process_file(
     bm_crop = bm[y1:y2, x1:x2]
     binDif_top_crop = binDif_top_masked[y1:y2, x1:x2]
     binDif_bot_crop = binDif_bot_masked[y1:y2, x1:x2]
+    mask_crop = mask[y1:y2, x1:x2]
     binReg_top = cv2.subtract(reg, bm_crop)
     topDiff = cv2.subtract(clahe_equalize(binDif_top_crop), clahe_equalize(binReg_top))
+    topDiff = topDiff * mask_crop
     cv2.imwrite(str(top_dir / path.name), to_uint8(topDiff))
-    topBW = segment_image(topDiff, params)
+    topBW = segment_image(topDiff, params, mask=mask_crop)
     cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
     areas_top = connected_component_areas(topBW)
     areas_top.sort(reverse=True)
     comp_bm_crop = complement(bm)[y1:y2, x1:x2]
     binReg_bot = cv2.subtract(reg, comp_bm_crop)
     botDiff = cv2.subtract(clahe_equalize(binDif_bot_crop), clahe_equalize(binReg_bot))
+    botDiff = botDiff * mask_crop
     cv2.imwrite(str(bot_dir / path.name), to_uint8(botDiff))
-    botBW = segment_image(botDiff, params)
+    botBW = segment_image(botDiff, params, mask=mask_crop)
     cv2.imwrite(str(botbw_dir / path.name), to_uint8(botBW))
     areas_bot = connected_component_areas(botBW)
     areas_bot.sort(reverse=True)
