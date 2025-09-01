@@ -86,6 +86,36 @@ def test_load_dm_with_sidecar(tmp_path, monkeypatch):
     app.quit()
 
 
+def test_load_bm_with_sidecar(tmp_path, monkeypatch):
+    """MainWindow.load_bm should populate dm_roi from JSON sidecar."""
+    import json
+    import pytest
+
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QApplication, QFileDialog
+    from gui import MainWindow
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+
+    bm_path = tmp_path / "bm.png"
+    cv2.imwrite(str(bm_path), np.zeros((5, 5), dtype=np.uint8))
+    roi = (1, 2, 3, 4)
+    with open(bm_path.with_suffix(".json"), "w", encoding="utf-8") as fh:
+        json.dump({"offset": [roi[0], roi[1]], "size": [roi[2], roi[3]]}, fh)
+
+    mw = MainWindow()
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *args, **kwargs: (str(bm_path), "")
+    )
+    mw.load_bm()
+    assert mw.dm_roi == roi
+
+    bm_path.unlink()
+    bm_path.with_suffix(".json").unlink()
+    app.quit()
+
+
 def test_register_ecc_matches_roi_dataset():
     full = load("roi_full.pgm")
     dm_small = load("roi_dm.pgm")

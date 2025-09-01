@@ -34,19 +34,17 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_roi(
-    cur: np.ndarray,
     dm: np.ndarray,
     bm: np.ndarray,
     binDif_top: np.ndarray,
     binDif_bot: np.ndarray,
     roi: tuple[int, int, int, int] | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return inputs cropped to *roi* if provided."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return baseline arrays cropped to *roi* if provided."""
     if roi is None:
-        return cur, dm, bm, binDif_top, binDif_bot
+        return dm, bm, binDif_top, binDif_bot
     x, y, w, h = roi
     return (
-        cur[y:y + h, x:x + w],
         dm[y:y + h, x:x + w],
         bm[y:y + h, x:x + w],
         binDif_top[y:y + h, x:x + w],
@@ -73,10 +71,13 @@ def _process_file(
     Returns the index, filename, current image, and processing results.
     """
     cur_full = imread_gray(path)
-    cur, dm_roi, bm_roi, binDif_top_roi, binDif_bot_roi = _apply_roi(
-        cur_full, dm, bm, binDif_top, binDif_bot, roi
+    dm_roi, bm_roi, binDif_top_roi, binDif_bot_roi = _apply_roi(
+        dm, bm, binDif_top, binDif_bot, roi
     )
-    reg, mask = register_ecc(cur, dm_roi, params)
+    # Register the full current image against the full DM but restrict the
+    # optimisation to the ROI.  ``register_ecc`` returns arrays already cropped
+    # to this ROI, which we then use for subtraction and segmentation.
+    reg, mask = register_ecc(cur_full, dm, params, roi=roi)
     reg = reg * mask
     binDif_top_masked = binDif_top_roi * mask
     binDif_bot_masked = binDif_bot_roi * mask
