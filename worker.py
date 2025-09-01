@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Sequence
 
 import cv2
 import numpy as np
@@ -17,7 +18,6 @@ from PyQt6.QtCore import (
 from io_utils import (
     imread_gray,
     ensure_dir,
-    list_jpgs,
     to_uint8,
 )
 from processing import (
@@ -80,13 +80,22 @@ class ProcessorWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, in_dir: Path | str, out_dir: Path | str, dm_path: Path | str, bm_path: Path | str, params: RegSegParams):
+    def __init__(
+        self,
+        in_dir: Path | str,
+        out_dir: Path | str,
+        dm_path: Path | str,
+        bm_path: Path | str,
+        params: RegSegParams,
+        files: Sequence[Path],
+    ):
         super().__init__()
         self.in_dir = Path(in_dir)
         self.out_dir = Path(out_dir)
         self.dm_path = Path(dm_path)
         self.bm_path = Path(bm_path)
         self.params = params
+        self.files = [Path(f) for f in files]
         self._stop = False
         self._pause = False
         self._mutex = QMutex()
@@ -138,7 +147,7 @@ class ProcessorWorker(QObject):
                 ensure_dir(d)
             binDif_top = cv2.subtract(dm, bm)
             binDif_bot = cv2.subtract(dm, complement(bm))
-            files = list_jpgs(self.in_dir)
+            files = self.files
             if not files:
                 msg = f"No image files found in {self.in_dir}"
                 logger.warning(msg)
@@ -159,7 +168,7 @@ class ProcessorWorker(QObject):
             else:
                 bot_wb = Workbook()
                 bot_ws = bot_wb.active
-            logger.info("Processing %d files in %s", len(files), self.in_dir)
+            logger.info("Processing %d files in %s", total, self.in_dir)
             results_top: dict[int, list[int]] = {}
             results_bot: dict[int, list[int]] = {}
             with ThreadPoolExecutor() as executor:
