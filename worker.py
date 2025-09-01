@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
@@ -30,6 +31,44 @@ from processing import (
 from openpyxl import Workbook, load_workbook
 
 logger = logging.getLogger(__name__)
+
+
+def _process_file(
+    idx: int,
+    fname: str,
+    in_dir: str,
+    dm: np.ndarray,
+    bm: np.ndarray,
+    params: RegSegParams,
+    top_dir: str,
+    topbw_dir: str,
+    bot_dir: str,
+    botbw_dir: str,
+    binDif_top: np.ndarray,
+    binDif_bot: np.ndarray,
+):
+    """Process a single image file.
+
+    Returns the index, filename, current image, and processing results.
+    """
+    path = os.path.join(in_dir, fname)
+    cur = imread_gray(path)
+    reg = register_ecc(cur, dm, params)
+    binReg_top = cv2.subtract(reg, bm)
+    topDiff = cv2.subtract(clahe_equalize(binDif_top), clahe_equalize(binReg_top))
+    cv2.imwrite(os.path.join(top_dir, fname), to_uint8(topDiff))
+    topBW = segment_image(topDiff, params)
+    cv2.imwrite(os.path.join(topbw_dir, fname), to_uint8(topBW))
+    areas_top = connected_component_areas(topBW)
+    areas_top.sort(reverse=True)
+    binReg_bot = cv2.subtract(reg, complement(bm))
+    botDiff = cv2.subtract(clahe_equalize(binDif_bot), clahe_equalize(binReg_bot))
+    cv2.imwrite(os.path.join(bot_dir, fname), to_uint8(botDiff))
+    botBW = segment_image(botDiff, params)
+    cv2.imwrite(os.path.join(botbw_dir, fname), to_uint8(botBW))
+    areas_bot = connected_component_areas(botBW)
+    areas_bot.sort(reverse=True)
+    return idx, fname, cur, topDiff, botDiff, areas_top, areas_bot
 
 
 class ProcessorWorker(QObject):
@@ -122,35 +161,54 @@ class ProcessorWorker(QObject):
                 bot_wb = Workbook()
                 bot_ws = bot_wb.active
             logger.info("Processing %d files", len(files))
-            for idx, fname in enumerate(files, start=1):
-                self._check_pause_stop()
-                self.status.emit(f"Processing {idx}/{total}: {fname}")
-                path = os.path.join(self.in_dir, fname)
-                cur = imread_gray(path)
-                self.imagePreviews.emit(dm, bm, cur)
-                reg = register_ecc(cur, dm, self.params)
-                binReg_top = cv2.subtract(reg, bm)
-                topDiff = cv2.subtract(clahe_equalize(binDif_top), clahe_equalize(binReg_top))
-                self.diffPreviews.emit(topDiff, topDiff)
-                cv2.imwrite(os.path.join(top_dir, fname), to_uint8(topDiff))
-                topBW = segment_image(topDiff, self.params)
-                cv2.imwrite(os.path.join(topbw_dir, fname), to_uint8(topBW))
-                areas_top = connected_component_areas(topBW)
-                areas_top.sort(reverse=True)
+            results_top: dict[int, list[int]] = {}
+            results_bot: dict[int, list[int]] = {}
+            with ThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(
+                        _process_file,
+                        idx,
+                        fname,
+                        self.in_dir,
+                        dm,
+                        bm,
+                        self.params,
+                        top_dir,
+                        topbw_dir,
+                        bot_dir,
+                        botbw_dir,
+                        binDif_top,
+                        binDif_bot,
+                    )
+                    for idx, fname in enumerate(files, start=1)
+                ]
+                completed = 0
+                for future in as_completed(futures):
+                    self._check_pause_stop()
+                    (
+                        idx,
+                        fname,
+                        cur,
+                        topDiff,
+                        botDiff,
+                        areas_top,
+                        areas_bot,
+                    ) = future.result()
+                    results_top[idx] = areas_top
+                    results_bot[idx] = areas_bot
+                    self.status.emit(f"Processing {idx}/{total}: {fname}")
+                    self.imagePreviews.emit(dm, bm, cur)
+                    self.diffPreviews.emit(topDiff, botDiff)
+                    completed += 1
+                    progress_pct = int(completed / total * 100)
+                    self.progress.emit(progress_pct)
+            for idx in range(1, total + 1):
+                areas_top = results_top.get(idx, [])
                 for row, area in enumerate(areas_top, start=1):
                     top_ws.cell(row=row, column=idx, value=int(area))
-                binReg_bot = cv2.subtract(reg, complement(bm))
-                botDiff = cv2.subtract(clahe_equalize(binDif_bot), clahe_equalize(binReg_bot))
-                self.diffPreviews.emit(topDiff, botDiff)
-                cv2.imwrite(os.path.join(bot_dir, fname), to_uint8(botDiff))
-                botBW = segment_image(botDiff, self.params)
-                cv2.imwrite(os.path.join(botbw_dir, fname), to_uint8(botBW))
-                areas_bot = connected_component_areas(botBW)
-                areas_bot.sort(reverse=True)
+                areas_bot = results_bot.get(idx, [])
                 for row, area in enumerate(areas_bot, start=1):
                     bot_ws.cell(row=row, column=idx, value=int(area))
-                progress_pct = int(idx / total * 100)
-                self.progress.emit(progress_pct)
             self.status.emit("Done.")
             self.progress.emit(100)
         except Exception as exc:
