@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 
+import worker
 from worker import _apply_roi, _process_file
 from processing import RegSegParams, complement
 
@@ -113,3 +114,55 @@ def test_process_file_crops_to_mask(tmp_path):
     )
     assert topDiff.shape == (h, w)
     assert botDiff.shape == (h, w)
+
+
+def test_process_file_complements_roi_only(tmp_path, monkeypatch):
+    full = load("roi_full.pgm")
+    dm_small = load("roi_dm.pgm")
+    bm_small = load("roi_bm.pgm")
+    roi = (5, 7, 8, 8)
+    dm = np.zeros_like(full)
+    bm = np.zeros_like(full)
+    x, y, w, h = roi
+    dm[y:y + h, x:x + w] = dm_small
+    bm[y:y + h, x:x + w] = bm_small
+    binDif_top = cv2.subtract(dm, bm)
+    from processing import complement as proc_complement
+    binDif_bot = cv2.subtract(dm, proc_complement(bm))
+    img_path = tmp_path / "cur.pgm"
+    cv2.imwrite(str(img_path), full)
+    top_dir = tmp_path / "top"; top_dir.mkdir()
+    topbw_dir = tmp_path / "topBW"; topbw_dir.mkdir()
+    bot_dir = tmp_path / "bottom"; bot_dir.mkdir()
+    botbw_dir = tmp_path / "bottomBW"; botbw_dir.mkdir()
+    params = RegSegParams(maxIter=50)
+
+    def fake_register(cur, dm_roi, params):
+        return cur, np.ones_like(cur, dtype=np.uint8)
+
+    monkeypatch.setattr(worker, "register_ecc", fake_register)
+
+    shapes: list[tuple[int, int]] = []
+
+    def spy_complement(img: np.ndarray) -> np.ndarray:
+        shapes.append(img.shape)
+        return proc_complement(img)
+
+    monkeypatch.setattr(worker, "complement", spy_complement)
+
+    _process_file(
+        1,
+        img_path,
+        dm,
+        bm,
+        params,
+        top_dir,
+        topbw_dir,
+        bot_dir,
+        botbw_dir,
+        binDif_top,
+        binDif_bot,
+        roi,
+    )
+
+    assert shapes == [bm_small.shape]

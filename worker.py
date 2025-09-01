@@ -99,7 +99,8 @@ def _process_file(
     cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
     areas_top = connected_component_areas(topBW)
     areas_top.sort(reverse=True)
-    comp_bm_crop = complement(bm_roi)[y1:y2, x1:x2]
+    comp_bm_roi = complement(bm_roi)
+    comp_bm_crop = comp_bm_roi[y1:y2, x1:x2]
     binReg_bot = cv2.subtract(reg, comp_bm_crop)
     botDiff = cv2.subtract(clahe_equalize(binDif_bot_crop), clahe_equalize(binReg_bot))
     botDiff = botDiff * mask_crop
