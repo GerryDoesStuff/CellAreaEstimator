@@ -33,6 +33,27 @@ from openpyxl import Workbook, load_workbook
 logger = logging.getLogger(__name__)
 
 
+def _apply_roi(
+    cur: np.ndarray,
+    dm: np.ndarray,
+    bm: np.ndarray,
+    binDif_top: np.ndarray,
+    binDif_bot: np.ndarray,
+    roi: tuple[int, int, int, int] | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return inputs cropped to *roi* if provided."""
+    if roi is None:
+        return cur, dm, bm, binDif_top, binDif_bot
+    x, y, w, h = roi
+    return (
+        cur[y:y + h, x:x + w],
+        dm[y:y + h, x:x + w],
+        bm[y:y + h, x:x + w],
+        binDif_top[y:y + h, x:x + w],
+        binDif_bot[y:y + h, x:x + w],
+    )
+
+
 def _process_file(
     idx: int,
     path: Path,
@@ -51,24 +72,18 @@ def _process_file(
 
     Returns the index, filename, current image, and processing results.
     """
-    cur = imread_gray(path)
-    reg, mask = register_ecc(cur, dm, params, roi=roi)
-    if roi is not None:
-        x, y, w, h = roi
-        bm_roi = bm[y:y + h, x:x + w]
-        binDif_top_roi = binDif_top[y:y + h, x:x + w]
-        binDif_bot_roi = binDif_bot[y:y + h, x:x + w]
-    else:
-        bm_roi = bm
-        binDif_top_roi = binDif_top
-        binDif_bot_roi = binDif_bot
+    cur_full = imread_gray(path)
+    cur, dm_roi, bm_roi, binDif_top_roi, binDif_bot_roi = _apply_roi(
+        cur_full, dm, bm, binDif_top, binDif_bot, roi
+    )
+    reg, mask = register_ecc(cur, dm_roi, params)
     reg = reg * mask
     binDif_top_masked = binDif_top_roi * mask
     binDif_bot_masked = binDif_bot_roi * mask
     ys, xs = np.nonzero(mask)
     if ys.size == 0 or xs.size == 0:
         empty = np.zeros_like(mask)
-        return idx, path.name, cur, empty, empty, [], []
+        return idx, path.name, cur_full, empty, empty, [], []
     y1, y2 = ys.min(), ys.max() + 1
     x1, x2 = xs.min(), xs.max() + 1
     reg = reg[y1:y2, x1:x2]
@@ -84,7 +99,7 @@ def _process_file(
     cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
     areas_top = connected_component_areas(topBW)
     areas_top.sort(reverse=True)
-    comp_bm_crop = complement(bm)[y1:y2, x1:x2]
+    comp_bm_crop = complement(bm_roi)[y1:y2, x1:x2]
     binReg_bot = cv2.subtract(reg, comp_bm_crop)
     botDiff = cv2.subtract(clahe_equalize(binDif_bot_crop), clahe_equalize(binReg_bot))
     botDiff = botDiff * mask_crop
@@ -93,7 +108,7 @@ def _process_file(
     cv2.imwrite(str(botbw_dir / path.name), to_uint8(botBW))
     areas_bot = connected_component_areas(botBW)
     areas_bot.sort(reverse=True)
-    return idx, path.name, cur, topDiff, botDiff, areas_top, areas_bot
+    return idx, path.name, cur_full, topDiff, botDiff, areas_top, areas_bot
 
 
 class ProcessorWorker(QObject):
