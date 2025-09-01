@@ -75,7 +75,8 @@ class ProcessorWorker(QObject):
     progress = pyqtSignal(int)
     status = pyqtSignal(str)
     imagePreviews = pyqtSignal(np.ndarray, np.ndarray, np.ndarray)
-    diffPreviews = pyqtSignal(np.ndarray, np.ndarray)
+    topPreview = pyqtSignal(np.ndarray)
+    bottomPreview = pyqtSignal(np.ndarray)
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
@@ -195,7 +196,9 @@ class ProcessorWorker(QObject):
                     results_bot[idx] = areas_bot
                     self.status.emit(f"Processing {idx}/{total}: {fname}")
                     self.imagePreviews.emit(dm, bm, cur)
-                    self.diffPreviews.emit(topDiff, botDiff)
+                    # Emit previews only after both diffs are ready
+                    self.topPreview.emit(topDiff)
+                    self.bottomPreview.emit(botDiff)
                     completed += 1
                     progress_pct = int(completed / total * 100)
                     self.progress.emit(progress_pct)

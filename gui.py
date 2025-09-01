@@ -215,7 +215,8 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.status.connect(self.statusBar().showMessage)
         self.worker.imagePreviews.connect(self.update_image_previews)
-        self.worker.diffPreviews.connect(self.update_diff_previews)
+        self.worker.topPreview.connect(self.update_top_preview)
+        self.worker.bottomPreview.connect(self.update_bottom_preview)
         self.worker.error.connect(lambda msg: QMessageBox.critical(self, "Error", msg))
         self.worker_thread.start()
 
@@ -234,9 +235,12 @@ class MainWindow(QMainWindow):
         self.set_label_image(self.img_bm, bm)
         self.set_label_image(self.img_input, cur)
 
-    @pyqtSlot(np.ndarray, np.ndarray)
-    def update_diff_previews(self, top: np.ndarray, bottom: np.ndarray) -> None:
+    @pyqtSlot(np.ndarray)
+    def update_top_preview(self, top: np.ndarray) -> None:
         self.set_label_image(self.img_top, top)
+
+    @pyqtSlot(np.ndarray)
+    def update_bottom_preview(self, bottom: np.ndarray) -> None:
         self.set_label_image(self.img_bottom, bottom)
 
     def set_label_image(self, label: QLabel, img: np.ndarray) -> None:
