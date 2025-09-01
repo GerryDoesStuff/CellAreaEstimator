@@ -49,6 +49,21 @@ class RegSegParams:
     segIter: int = 50           # Chan–Vese iterations if available
 
 
+def difference_mask(img_a: np.ndarray, img_b: np.ndarray) -> np.ndarray:
+    """Compute an absolute difference mask from two baseline images."""
+    g1 = to_uint8(img_a)
+    g2 = to_uint8(img_b)
+    return cv2.absdiff(g1, g2)
+
+
+def mask_from_rects(shape: tuple[int, int], rects: List[tuple[int, int, int, int]]) -> np.ndarray:
+    """Create a binary mask of ``shape`` from a list of rectangles."""
+    mask = np.zeros(shape, dtype=np.uint8)
+    for x, y, w, h in rects:
+        mask[y:y + h, x:x + w] = 255
+    return mask
+
+
 def ksize_from_sigma(sigma: float) -> int:
     """Given a Gaussian sigma, compute an odd kernel size for OpenCV."""
     if sigma <= 0:
