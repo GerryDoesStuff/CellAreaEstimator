@@ -30,9 +30,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from processing import RegSegParams, difference_mask, mask_from_rects
+from processing import RegSegParams, difference_mask, mask_from_rects, register_ecc
 from worker import ProcessorWorker
-from io_utils import imread_gray, qimage_from_gray, list_jpgs
+from io_utils import imread_gray, qimage_from_gray, list_jpgs, to_uint8
 
 logger = logging.getLogger(__name__)
 
@@ -190,9 +190,11 @@ class MaskPrepDialog(QDialog):
         self.btn_load_a = QPushButton("Load Image A")
         self.btn_load_b = QPushButton("Load Image B")
         self.btn_compute = QPushButton("Compute DM")
+        self.cb_register = QCheckBox("Register")
         load_layout.addWidget(self.btn_load_a)
         load_layout.addWidget(self.btn_load_b)
         load_layout.addWidget(self.btn_compute)
+        load_layout.addWidget(self.cb_register)
         self.lbl_a = QLabel(); self.lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_b = QLabel(); self.lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_dm = QLabel(); self.lbl_dm.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -236,7 +238,34 @@ class MaskPrepDialog(QDialog):
         if self.img_a is None or self.img_b is None:
             QMessageBox.warning(self, "Missing Images", "Please load both baseline images first.")
             return
-        self.dm = difference_mask(self.img_a, self.img_b)
+        img_a = self.img_a
+        img_b = self.img_b
+        if img_a is None or img_b is None:
+            return  # pragma: no cover - guarded above
+        if self.cb_register.isChecked():
+            params = getattr(self.parent(), "params", RegSegParams())
+            reg, mask = register_ecc(img_b, img_a, params)
+        else:
+            reg = img_b
+            mask = np.ones_like(img_a, dtype=np.uint8)
+        disp = to_uint8(reg * mask)
+        x, y, w, h = cv2.selectROI("Crop Registered", disp, False, False)
+        cv2.destroyWindow("Crop Registered")
+        if w == 0 or h == 0:
+            ys, xs = np.nonzero(mask)
+            if xs.size > 0 and ys.size > 0:
+                x1, x2 = xs.min(), xs.max() + 1
+                y1, y2 = ys.min(), ys.max() + 1
+                x, y, w, h = x1, y1, x2 - x1, y2 - y1
+            else:
+                h, w = img_a.shape
+                x = y = 0
+        self.dm_roi = (int(x), int(y), int(w), int(h))
+        img_a_crop = img_a[y:y + h, x:x + w]
+        reg_crop = reg[y:y + h, x:x + w]
+        mask_crop = mask[y:y + h, x:x + w]
+        dm_raw = difference_mask(img_a_crop, reg_crop)
+        self.dm = dm_raw * mask_crop
         self.lbl_dm.setPixmap(QPixmap.fromImage(qimage_from_gray(self.dm)))
         self.draw.load_image(self.dm)
 
@@ -257,52 +286,37 @@ class MaskPrepDialog(QDialog):
         if self.dm is None:
             QMessageBox.warning(self, "No DM", "Compute the difference mask first.")
             return
-        roi = self.draw.get_roi()
-        if roi is None:
-            QMessageBox.warning(self, "No ROI", "Draw a rectangle to select a region of interest.")
-            return
-        x, y, w, h = roi
-        dm_crop = self.dm[y:y + h, x:x + w]
         path, _ = QFileDialog.getSaveFileName(self, "Save Difference Mask", "dm.png", "Images (*.png *.jpg *.tif *.tiff)")
         if path:
-            cv2.imwrite(path, dm_crop)
+            cv2.imwrite(path, self.dm)
             meta_path = Path(path).with_suffix(".json")
+            if self.dm_roi is None:
+                h, w = self.dm.shape
+                self.dm_roi = (0, 0, w, h)
+            x, y, w, h = self.dm_roi
             meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
             self._save_sidecar(meta_path, meta)
             self.dm_path = Path(path)
-            self.dm = dm_crop
-            # Persist the ROI so it can be used downstream even without a DM
-            # path.  ``roi`` is in absolute coordinates relative to the
-            # original baseline images.
-            self.dm_roi = (int(x), int(y), int(w), int(h))
 
     def save_bm(self) -> None:
         mask = self.draw.get_mask()
-        roi = self.draw.get_roi()
-        if mask.size == 1 or roi is None:
+        if mask.size == 1 or np.max(mask) == 0:
             QMessageBox.warning(self, "No BM", "Draw on the difference mask to create a binary mask.")
             return
-        x, y, w, h = roi
-        mask_crop = mask[y:y + h, x:x + w]
         path, _ = QFileDialog.getSaveFileName(self, "Save Binary Mask", "bm.png", "Images (*.png *.jpg *.tif *.tiff)")
         if path:
-            cv2.imwrite(path, mask_crop)
+            cv2.imwrite(path, mask)
             if self.dm_path:
                 meta_path = self.dm_path.with_suffix(".json")
-                if meta_path.exists():
-                    try:
-                        with open(meta_path, "r", encoding="utf-8") as fh:
-                            meta = json.load(fh)
-                    except (OSError, json.JSONDecodeError) as exc:
-                        logger.error("Failed to read DM metadata from %s", meta_path, exc_info=exc)
-                        meta = None
-                    if meta is None or "offset" not in meta or "size" not in meta:
-                        meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
-                        self._save_sidecar(meta_path, meta)
+            else:
+                meta_path = Path(path).with_suffix(".json")
+            if self.dm_roi is None:
+                h, w = mask.shape
+                self.dm_roi = (0, 0, w, h)
+            x, y, w, h = self.dm_roi
+            meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
+            self._save_sidecar(meta_path, meta)
             self.bm_path = Path(path)
-            # ``save_bm`` may be invoked without saving a DM.  Preserve the ROI
-            # so the main window can still crop correctly during processing.
-            self.dm_roi = (int(x), int(y), int(w), int(h))
 
 
 class MainWindow(QMainWindow):
