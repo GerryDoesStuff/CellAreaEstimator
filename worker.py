@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 
 import cv2
 import numpy as np
@@ -27,6 +28,8 @@ from processing import (
     complement,
 )
 from openpyxl import Workbook, load_workbook
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessorWorker(QObject):
@@ -99,7 +102,9 @@ class ProcessorWorker(QObject):
             binDif_bot = cv2.subtract(dm, complement(bm))
             files = list_jpgs(self.in_dir)
             if not files:
-                self.error.emit("No .jpg files found in the input directory.")
+                msg = "No .jpg files found in the input directory."
+                logger.warning(msg)
+                self.error.emit(msg)
                 return
             total = len(files)
             top_xlsx = os.path.join(self.out_dir, "top.xlsx")
@@ -116,6 +121,7 @@ class ProcessorWorker(QObject):
             else:
                 bot_wb = Workbook()
                 bot_ws = bot_wb.active
+            logger.info("Processing %d files", len(files))
             for idx, fname in enumerate(files, start=1):
                 self._check_pause_stop()
                 self.status.emit(f"Processing {idx}/{total}: {fname}")
@@ -148,6 +154,7 @@ class ProcessorWorker(QObject):
             self.status.emit("Done.")
             self.progress.emit(100)
         except Exception as exc:
+            logger.exception("Processing failed")
             self.error.emit(str(exc))
         finally:
             if top_wb is not None:
