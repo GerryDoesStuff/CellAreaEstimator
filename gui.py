@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import logging
 from typing import Optional
+import json
 
 import numpy as np
 import cv2
@@ -154,6 +155,21 @@ class DrawLabel(QLabel):
         rect_list = [(r.x(), r.y(), r.width(), r.height()) for r in self.rects]
         return mask_from_rects((h, w), rect_list)
 
+    def get_roi(self) -> tuple[int, int, int, int] | None:
+        """Return the bounding rectangle of all drawn rectangles.
+
+        The returned tuple is ``(x, y, w, h)`` or ``None`` if no rectangles
+        have been drawn.  This is useful for cropping the underlying image to
+        the selected region of interest.
+        """
+        if not self.rects:
+            return None
+        x1 = min(r.x() for r in self.rects)
+        y1 = min(r.y() for r in self.rects)
+        x2 = max(r.x() + r.width() for r in self.rects)
+        y2 = max(r.y() + r.height() for r in self.rects)
+        return x1, y1, x2 - x1, y2 - y1
+
 
 class MaskPrepDialog(QDialog):
     """Dialog to prepare difference and binary masks from baseline images."""
@@ -224,19 +240,48 @@ class MaskPrepDialog(QDialog):
         if self.dm is None:
             QMessageBox.warning(self, "No DM", "Compute the difference mask first.")
             return
+        roi = self.draw.get_roi()
+        if roi is None:
+            QMessageBox.warning(self, "No ROI", "Draw a rectangle to select a region of interest.")
+            return
+        x, y, w, h = roi
+        dm_crop = self.dm[y:y + h, x:x + w]
         path, _ = QFileDialog.getSaveFileName(self, "Save Difference Mask", "dm.png", "Images (*.png *.jpg *.tif *.tiff)")
         if path:
-            cv2.imwrite(path, self.dm)
+            cv2.imwrite(path, dm_crop)
+            meta_path = Path(path).with_suffix(".json")
+            meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
+            try:
+                with open(meta_path, "w", encoding="utf-8") as fh:
+                    json.dump(meta, fh)
+            except OSError as exc:
+                logger.error("Failed to save DM metadata", exc_info=exc)
             self.dm_path = Path(path)
+            self.dm = dm_crop
 
     def save_bm(self) -> None:
         mask = self.draw.get_mask()
-        if mask.size == 1:
+        roi = self.draw.get_roi()
+        if mask.size == 1 or roi is None:
             QMessageBox.warning(self, "No BM", "Draw on the difference mask to create a binary mask.")
             return
+        x, y, w, h = roi
+        mask_crop = mask[y:y + h, x:x + w]
         path, _ = QFileDialog.getSaveFileName(self, "Save Binary Mask", "bm.png", "Images (*.png *.jpg *.tif *.tiff)")
         if path:
-            cv2.imwrite(path, mask)
+            cv2.imwrite(path, mask_crop)
+            if self.dm_path:
+                meta_path = self.dm_path.with_suffix(".json")
+                if meta_path.exists():
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as fh:
+                            meta = json.load(fh)
+                    except OSError:
+                        meta = None
+                    if meta is None or "offset" not in meta or "size" not in meta:
+                        meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
+                        with open(meta_path, "w", encoding="utf-8") as fh:
+                            json.dump(meta, fh)
             self.bm_path = Path(path)
 
 
@@ -247,6 +292,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Cell Area Estimator (PyQt6)")
         self.params = RegSegParams()
+        self.dm_roi: Optional[tuple[int, int, int, int]] = None
         menubar = self.menuBar()
         tools_menu = menubar.addMenu("Tools")
         params_action = QAction("Registration/Segmentation Setup", self)
@@ -323,6 +369,7 @@ class MainWindow(QMainWindow):
             if dlg.dm_path and dlg.dm is not None:
                 self.dm_path.setText(str(dlg.dm_path))
                 self.set_label_image(self.img_dm, dlg.dm)
+                self.load_dm_metadata(dlg.dm_path)
             if dlg.bm_path:
                 bm = imread_gray(dlg.bm_path)
                 self.bm_path.setText(str(dlg.bm_path))
@@ -335,6 +382,7 @@ class MainWindow(QMainWindow):
             try:
                 im = imread_gray(Path(path))
                 self.set_label_image(self.img_dm, im)
+                self.load_dm_metadata(Path(path))
                 logger.info("Loaded difference mask from %s", path)
             except Exception as exc:
                 logger.error("Failed to load difference mask", exc_info=exc)
@@ -351,6 +399,26 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 logger.error("Failed to load binary mask", exc_info=exc)
                 QMessageBox.critical(self, "Error", str(exc))
+
+    def load_dm_metadata(self, path: Path) -> None:
+        """Load ROI metadata from a JSON sidecar next to ``path``."""
+        self.dm_roi = None
+        meta = path.with_suffix(".json")
+        if meta.exists():
+            try:
+                with open(meta, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                offset = data.get("offset")
+                size = data.get("size")
+                if offset and size and len(offset) == 2 and len(size) == 2:
+                    self.dm_roi = (
+                        int(offset[0]),
+                        int(offset[1]),
+                        int(size[0]),
+                        int(size[1]),
+                    )
+            except Exception as exc:
+                logger.warning("Failed to load DM metadata from %s: %s", meta, exc)
 
     def select_input_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Select Input Directory")
@@ -379,7 +447,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         logger.info("Starting processing for %d images in %s", len(files), in_dir)
         self.worker_thread = QThread()
-        self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params, files)
+        self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params, files, dm_roi=self.dm_roi)
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.worker_thread.quit)
