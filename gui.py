@@ -444,6 +444,20 @@ class MainWindow(QMainWindow):
                 im = imread_gray(Path(path))
                 self.set_label_image(self.img_bm, im)
                 logger.info("Loaded binary mask from %s", path)
+                try:
+                    # The binary mask shares the same ROI metadata format as the
+                    # difference mask.  When loading a BM we therefore attempt to
+                    # read the accompanying JSON sidecar so that processing can
+                    # crop to the correct region even if no DM is provided.
+                    self.load_dm_metadata(Path(path))
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.error(
+                        "Failed to load BM metadata from %s",
+                        Path(path).with_suffix(".json"),
+                        exc_info=exc,
+                    )
+                    QMessageBox.warning(self, "Metadata Error", f"Failed to load BM metadata: {exc}")
+                    self.dm_roi = None
             except Exception as exc:
                 logger.error("Failed to load binary mask", exc_info=exc)
                 QMessageBox.critical(self, "Error", str(exc))
