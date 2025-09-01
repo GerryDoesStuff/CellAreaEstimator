@@ -276,8 +276,11 @@ class MaskPrepDialog(QDialog):
             cv2.imwrite(path, self.dm)
             meta_path = Path(path).with_suffix(".json")
             if self.dm_roi is None:
-                h, w = self.dm.shape
-                self.dm_roi = (0, 0, w, h)
+                roi = self.draw.get_roi()
+                if roi is None:
+                    h, w = self.dm.shape
+                    roi = (0, 0, w, h)
+                self.dm_roi = roi
             x, y, w, h = self.dm_roi
             meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
             self._save_sidecar(meta_path, meta)
@@ -296,8 +299,11 @@ class MaskPrepDialog(QDialog):
             else:
                 meta_path = Path(path).with_suffix(".json")
             if self.dm_roi is None:
-                h, w = mask.shape
-                self.dm_roi = (0, 0, w, h)
+                roi = self.draw.get_roi()
+                if roi is None:
+                    h, w = mask.shape
+                    roi = (0, 0, w, h)
+                self.dm_roi = roi
             x, y, w, h = self.dm_roi
             meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
             self._save_sidecar(meta_path, meta)
