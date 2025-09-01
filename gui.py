@@ -202,8 +202,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Input", "Please provide valid DM, BM, input directory and output directory.")
             logger.warning("Missing input paths: dm=%s bm=%s in=%s out=%s", dm, bm, in_dir, out_dir)
             return
+        files = list_jpgs(in_dir)
         self.progress_bar.setValue(0)
-        logger.info("Starting processing for %d images", len(list_jpgs(in_dir)))
+        logger.info("Starting processing for %d images in %s", len(files), in_dir)
         self.worker_thread = QThread()
         self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params)
         self.worker.moveToThread(self.worker_thread)
