@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import os
+import logging
+
 import numpy as np
 from PyQt6.QtCore import Qt, QThread, pyqtSlot
 from PyQt6.QtGui import QPixmap
@@ -28,7 +31,9 @@ from PyQt6.QtWidgets import (
 
 from processing import RegSegParams
 from worker import ProcessorWorker
-from io_utils import imread_gray, qimage_from_gray
+from io_utils import imread_gray, qimage_from_gray, list_jpgs
+
+logger = logging.getLogger(__name__)
 
 
 class ParamDialog(QDialog):
@@ -163,7 +168,9 @@ class MainWindow(QMainWindow):
             try:
                 im = imread_gray(Path(path))
                 self.set_label_image(self.img_dm, im)
+                logger.info("Loaded difference mask from %s", path)
             except Exception as exc:
+                logger.error("Failed to load difference mask", exc_info=exc)
                 QMessageBox.critical(self, "Error", str(exc))
 
     def load_bm(self) -> None:
@@ -173,7 +180,9 @@ class MainWindow(QMainWindow):
             try:
                 im = imread_gray(Path(path))
                 self.set_label_image(self.img_bm, im)
+                logger.info("Loaded binary mask from %s", path)
             except Exception as exc:
+                logger.error("Failed to load binary mask", exc_info=exc)
                 QMessageBox.critical(self, "Error", str(exc))
 
     def select_input_dir(self) -> None:
@@ -193,8 +202,10 @@ class MainWindow(QMainWindow):
         bm = Path(self.bm_path.text().strip())
         if not (in_dir.is_dir() and out_dir.is_dir() and dm.is_file() and bm.is_file()):
             QMessageBox.warning(self, "Missing Input", "Please provide valid DM, BM, input directory and output directory.")
+            logger.warning("Missing input paths: dm=%s bm=%s in=%s out=%s", dm, bm, in_dir, out_dir)
             return
         self.progress_bar.setValue(0)
+        logger.info("Starting processing for %d images", len(list_jpgs(in_dir)))
         self.worker_thread = QThread()
         self.worker = ProcessorWorker(in_dir, out_dir, dm, bm, self.params)
         self.worker.moveToThread(self.worker_thread)

@@ -3,16 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 import time
 from typing import Optional
+import os
+import logging
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import (
+    QObject,
+    pyqtSignal,
+    pyqtSlot,
+    QMutex,
+    QWaitCondition,
+)
 
 from io_utils import (
     imread_gray,
     ensure_dir,
     list_jpgs,
-    write_sorted_areas_xlsx,
     to_uint8,
 )
 from processing import (
@@ -23,6 +30,9 @@ from processing import (
     clahe_equalize,
     complement,
 )
+from openpyxl import Workbook, load_workbook
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessorWorker(QObject):
@@ -44,22 +54,43 @@ class ProcessorWorker(QObject):
         self.params = params
         self._stop = False
         self._pause = False
+        self._mutex = QMutex()
+        self._wait_condition = QWaitCondition()
 
     def stop(self) -> None:
-        self._stop = True
+        """Request the worker thread to stop processing."""
+        self._mutex.lock()
+        try:
+            self._stop = True
+            self._wait_condition.wakeAll()
+        finally:
+            self._mutex.unlock()
 
     def toggle_pause(self, value: bool) -> None:
-        self._pause = value
+        """Pause or resume processing."""
+        self._mutex.lock()
+        try:
+            self._pause = value
+            if not self._pause:
+                self._wait_condition.wakeAll()
+        finally:
+            self._mutex.unlock()
 
     def _check_pause_stop(self) -> None:
-        while self._pause and not self._stop:
-            time.sleep(0.2)
-        if self._stop:
-            raise RuntimeError("Processing stopped by user.")
+        """Wait while paused and raise if a stop was requested."""
+        self._mutex.lock()
+        try:
+            while self._pause and not self._stop:
+                self._wait_condition.wait(self._mutex)
+            if self._stop:
+                raise RuntimeError("Processing stopped by user.")
+        finally:
+            self._mutex.unlock()
 
     @pyqtSlot()
     def run(self) -> None:
         """Entry point for the worker thread."""
+        top_wb = bot_wb = None
         try:
             dm = imread_gray(self.dm_path)
             bm = imread_gray(self.bm_path)
@@ -74,13 +105,27 @@ class ProcessorWorker(QObject):
             binDif_bot = cv2.subtract(dm, complement(bm))
             files = list_jpgs(self.in_dir)
             if not files:
-                self.error.emit("No .jpg files found in the input directory.")
-                self.finished.emit()
+                msg = "No .jpg files found in the input directory."
+                logger.warning(msg)
+                self.error.emit(msg)
                 return
             total = len(files)
-            top_xlsx = self.out_dir / "top.xlsx"
-            bot_xlsx = self.out_dir / "bottom.xlsx"
-            for idx, path in enumerate(files, start=1):
+            top_xlsx = os.path.join(self.out_dir, "top.xlsx")
+            bot_xlsx = os.path.join(self.out_dir, "bottom.xlsx")
+            if os.path.exists(top_xlsx):
+                top_wb = load_workbook(top_xlsx)
+                top_ws = top_wb.active
+            else:
+                top_wb = Workbook()
+                top_ws = top_wb.active
+            if os.path.exists(bot_xlsx):
+                bot_wb = load_workbook(bot_xlsx)
+                bot_ws = bot_wb.active
+            else:
+                bot_wb = Workbook()
+                bot_ws = bot_wb.active
+            logger.info("Processing %d files", len(files))
+            for idx, fname in enumerate(files, start=1):
                 self._check_pause_stop()
                 self.status.emit(f"Processing {idx}/{total}: {path.name}")
                 cur = imread_gray(path)
@@ -94,7 +139,8 @@ class ProcessorWorker(QObject):
                 cv2.imwrite(str(topbw_dir / path.name), to_uint8(topBW))
                 areas_top = connected_component_areas(topBW)
                 areas_top.sort(reverse=True)
-                write_sorted_areas_xlsx(top_xlsx, idx, areas_top)
+                for row, area in enumerate(areas_top, start=1):
+                    top_ws.cell(row=row, column=idx, value=int(area))
                 binReg_bot = cv2.subtract(reg, complement(bm))
                 botDiff = cv2.subtract(clahe_equalize(binDif_bot), clahe_equalize(binReg_bot))
                 self.diffPreviews.emit(topDiff, botDiff)
@@ -103,12 +149,18 @@ class ProcessorWorker(QObject):
                 cv2.imwrite(str(botbw_dir / path.name), to_uint8(botBW))
                 areas_bot = connected_component_areas(botBW)
                 areas_bot.sort(reverse=True)
-                write_sorted_areas_xlsx(bot_xlsx, idx, areas_bot)
+                for row, area in enumerate(areas_bot, start=1):
+                    bot_ws.cell(row=row, column=idx, value=int(area))
                 progress_pct = int(idx / total * 100)
                 self.progress.emit(progress_pct)
             self.status.emit("Done.")
             self.progress.emit(100)
-            self.finished.emit()
         except Exception as exc:
+            logger.exception("Processing failed")
             self.error.emit(str(exc))
+        finally:
+            if top_wb is not None:
+                top_wb.save(top_xlsx)
+            if bot_wb is not None:
+                bot_wb.save(bot_xlsx)
             self.finished.emit()

@@ -5,14 +5,18 @@ from typing import List
 
 import cv2
 import numpy as np
+import logging
 from openpyxl import Workbook, load_workbook
 from PyQt6.QtGui import QImage
+
+logger = logging.getLogger(__name__)
 
 
 def imread_gray(path: Path | str) -> np.ndarray:
     """Read an image from *path* and ensure it is grayscale."""
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
+        logger.error("Failed to read image: %s", path)
         raise IOError(f"Failed to read image: {path}")
     if img.ndim == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -38,12 +42,15 @@ def qimage_from_gray(img: np.ndarray) -> QImage:
     return QImage(g.data, w, h, w, QImage.Format.Format_Grayscale8)
 
 
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+    logger.debug("Ensured directory exists: %s", path)
 
 
-def list_jpgs(folder: Path) -> List[Path]:
-    return [p for p in folder.iterdir() if p.suffix.lower() == ".jpg"]
+def list_jpgs(folder: str) -> List[str]:
+    files = [f for f in os.listdir(folder) if f.lower().endswith('.jpg')]
+    logger.debug("Found %d .jpg files in %s", len(files), folder)
+    return files
 
 
 def num2xlcol(col_num: int) -> str:
