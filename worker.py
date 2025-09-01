@@ -70,6 +70,11 @@ def _process_file(
 ):
     """Process a single image file.
 
+    Registration produces a binary overlap mask that constrains all
+    subsequent processing.  Registered images and difference masks are
+    multiplied by this mask, cropped to its bounding box and then passed to
+    segmentation, ensuring that only valid pixels contribute to analysis.
+
     Returns the index, filename, current image, and processing results.
     """
     cur_full = imread_gray(path)
