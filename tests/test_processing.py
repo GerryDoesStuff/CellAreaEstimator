@@ -50,3 +50,37 @@ def test_registration_with_roi():
     fixed_roi = fixed[2:12, 2:12]
     diff = cv2.subtract(fixed_roi, reg)
     assert diff.max() == 0
+
+
+def test_load_dm_with_sidecar(tmp_path, monkeypatch):
+    """MainWindow.load_dm should populate dm_roi from JSON sidecar."""
+    import json
+    import pytest
+
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QApplication, QFileDialog
+    from gui import MainWindow
+
+    # Ensure headless Qt
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+
+    # Create dummy difference mask and accompanying metadata
+    dm_path = tmp_path / "dm.png"
+    cv2.imwrite(str(dm_path), np.zeros((5, 5), dtype=np.uint8))
+    roi = (1, 2, 3, 4)
+    with open(dm_path.with_suffix(".json"), "w", encoding="utf-8") as fh:
+        json.dump({"offset": [roi[0], roi[1]], "size": [roi[2], roi[3]]}, fh)
+
+    # Load via MainWindow, patching file dialog
+    mw = MainWindow()
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *args, **kwargs: (str(dm_path), "")
+    )
+    mw.load_dm()
+    assert mw.dm_roi == roi
+
+    # Cleanup temporary files
+    dm_path.unlink()
+    dm_path.with_suffix(".json").unlink()
+    app.quit()
