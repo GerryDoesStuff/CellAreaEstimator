@@ -236,6 +236,19 @@ class MaskPrepDialog(QDialog):
         self.lbl_dm.setPixmap(QPixmap.fromImage(qimage_from_gray(self.dm)))
         self.draw.load_image(self.dm)
 
+    def _save_sidecar(self, path: Path, meta: dict) -> None:
+        """Persist JSON metadata to a sidecar file.
+
+        Any :class:`OSError` during writing triggers a critical message box and is
+        logged for troubleshooting.
+        """
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(meta, fh)
+        except OSError as exc:
+            logger.error("Failed to save metadata sidecar %s", path, exc_info=exc)
+            QMessageBox.critical(self, "Save Error", f"Could not save metadata: {exc}")
+
     def save_dm(self) -> None:
         if self.dm is None:
             QMessageBox.warning(self, "No DM", "Compute the difference mask first.")
@@ -251,11 +264,7 @@ class MaskPrepDialog(QDialog):
             cv2.imwrite(path, dm_crop)
             meta_path = Path(path).with_suffix(".json")
             meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
-            try:
-                with open(meta_path, "w", encoding="utf-8") as fh:
-                    json.dump(meta, fh)
-            except OSError as exc:
-                logger.error("Failed to save DM metadata", exc_info=exc)
+            self._save_sidecar(meta_path, meta)
             self.dm_path = Path(path)
             self.dm = dm_crop
 
@@ -276,12 +285,12 @@ class MaskPrepDialog(QDialog):
                     try:
                         with open(meta_path, "r", encoding="utf-8") as fh:
                             meta = json.load(fh)
-                    except OSError:
+                    except (OSError, json.JSONDecodeError) as exc:
+                        logger.error("Failed to read DM metadata from %s", meta_path, exc_info=exc)
                         meta = None
                     if meta is None or "offset" not in meta or "size" not in meta:
                         meta = {"offset": [int(x), int(y)], "size": [int(w), int(h)]}
-                        with open(meta_path, "w", encoding="utf-8") as fh:
-                            json.dump(meta, fh)
+                        self._save_sidecar(meta_path, meta)
             self.bm_path = Path(path)
 
 
@@ -369,24 +378,41 @@ class MainWindow(QMainWindow):
             if dlg.dm_path and dlg.dm is not None:
                 self.dm_path.setText(str(dlg.dm_path))
                 self.set_label_image(self.img_dm, dlg.dm)
-                self.load_dm_metadata(dlg.dm_path)
+                try:
+                    self.load_dm_metadata(dlg.dm_path)
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.error(
+                        "Failed to load DM metadata from %s", dlg.dm_path.with_suffix(".json"), exc_info=exc
+                    )
+                    QMessageBox.warning(self, "Metadata Error", f"Failed to load DM metadata: {exc}")
             if dlg.bm_path:
                 bm = imread_gray(dlg.bm_path)
                 self.bm_path.setText(str(dlg.bm_path))
                 self.set_label_image(self.img_bm, bm)
 
     def load_dm(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Difference Mask", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)")
-        if path:
-            self.dm_path.setText(path)
-            try:
-                im = imread_gray(Path(path))
-                self.set_label_image(self.img_dm, im)
-                self.load_dm_metadata(Path(path))
-                logger.info("Loaded difference mask from %s", path)
-            except Exception as exc:
-                logger.error("Failed to load difference mask", exc_info=exc)
-                QMessageBox.critical(self, "Error", str(exc))
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Difference Mask", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)"
+        )
+        if not path:
+            return
+        self.dm_path.setText(path)
+        try:
+            im = imread_gray(Path(path))
+        except Exception as exc:
+            logger.error("Failed to load difference mask image %s", path, exc_info=exc)
+            QMessageBox.critical(self, "Error", f"Failed to load difference mask: {exc}")
+            return
+        self.set_label_image(self.img_dm, im)
+        logger.info("Loaded difference mask from %s", path)
+        try:
+            self.load_dm_metadata(Path(path))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.error(
+                "Failed to load DM metadata from %s", Path(path).with_suffix(".json"), exc_info=exc
+            )
+            QMessageBox.warning(self, "Metadata Error", f"Failed to load DM metadata: {exc}")
+            self.dm_roi = None
 
     def load_bm(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select Binary Mask", "", "Images (*.jpg *.jpeg *.png *.tif *.tiff)")
@@ -404,21 +430,19 @@ class MainWindow(QMainWindow):
         """Load ROI metadata from a JSON sidecar next to ``path``."""
         self.dm_roi = None
         meta = path.with_suffix(".json")
-        if meta.exists():
-            try:
-                with open(meta, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                offset = data.get("offset")
-                size = data.get("size")
-                if offset and size and len(offset) == 2 and len(size) == 2:
-                    self.dm_roi = (
-                        int(offset[0]),
-                        int(offset[1]),
-                        int(size[0]),
-                        int(size[1]),
-                    )
-            except Exception as exc:
-                logger.warning("Failed to load DM metadata from %s: %s", meta, exc)
+        if not meta.exists():
+            return
+        with open(meta, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        offset = data.get("offset")
+        size = data.get("size")
+        if offset and size and len(offset) == 2 and len(size) == 2:
+            self.dm_roi = (
+                int(offset[0]),
+                int(offset[1]),
+                int(size[0]),
+                int(size[1]),
+            )
 
     def select_input_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Select Input Directory")
