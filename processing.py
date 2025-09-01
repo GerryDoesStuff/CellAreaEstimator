@@ -34,13 +34,19 @@ except Exception as exc:
 
 @dataclass
 class RegSegParams:
-    """Container for registration and segmentation parameters."""
-    numSpaSam: int = 5000       # not directly used by ECC but preserved for UI
-    numHisBin: int = 64         # not used by ECC
-    allPix: bool = True         # not used by ECC
-    groFac: float = 1.5         # not used by ECC
+    """Container for registration and segmentation parameters.
+
+    The previous implementation exposed several additional fields
+    (``numSpaSam``, ``numHisBin``, ``allPix``, ``groFac`` and ``iniRad``)
+    that were never used by the current ECC based registration routine.
+    They have been removed to reduce API surface and complexity.  Should a
+    future registration algorithm require control over spatial sampling,
+    histogram binning or similar concepts, those parameters can be added
+    back to this data class and plumbed through the registration functions
+    accordingly.
+    """
+
     epsilon: float = 1e-6       # ECC termination epsilon
-    iniRad: float = 1.0         # not used by ECC
     maxIter: int = 200          # ECC max iterations
     gausBlurDif: float = 2.0    # Gaussian sigma for difference mask
     gausBlurIn: float = 2.0     # Gaussian sigma for input image

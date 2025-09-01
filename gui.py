@@ -45,19 +45,9 @@ class ParamDialog(QDialog):
         self.setWindowTitle("Registration/Segmentation Parameters")
         self.params = params
         form = QFormLayout(self)
-        self.sp_numSpaSam = QSpinBox(); self.sp_numSpaSam.setRange(1, 1_000_000); self.sp_numSpaSam.setValue(params.numSpaSam)
-        self.sp_numHisBin = QSpinBox(); self.sp_numHisBin.setRange(1, 4096); self.sp_numHisBin.setValue(params.numHisBin)
-        self.cb_allPix = QCheckBox(); self.cb_allPix.setChecked(params.allPix)
-        self.dsp_groFac = QDoubleSpinBox(); self.dsp_groFac.setRange(0.0, 10.0); self.dsp_groFac.setSingleStep(0.1); self.dsp_groFac.setValue(params.groFac)
         self.dsp_epsilon = QDoubleSpinBox(); self.dsp_epsilon.setDecimals(10); self.dsp_epsilon.setRange(1e-10, 1e-1); self.dsp_epsilon.setValue(params.epsilon)
-        self.dsp_iniRad = QDoubleSpinBox(); self.dsp_iniRad.setRange(0.0, 50.0); self.dsp_iniRad.setSingleStep(0.1); self.dsp_iniRad.setValue(params.iniRad)
         self.sp_maxIter = QSpinBox(); self.sp_maxIter.setRange(1, 10000); self.sp_maxIter.setValue(params.maxIter)
-        form.addRow("[Reg] Num Spatial Samples", self.sp_numSpaSam)
-        form.addRow("[Reg] Num Hist Bins", self.sp_numHisBin)
-        form.addRow("[Reg] Use All Pixels", self.cb_allPix)
-        form.addRow("[Reg] Growth Factor", self.dsp_groFac)
         form.addRow("[Reg] Epsilon", self.dsp_epsilon)
-        form.addRow("[Reg] Initial Radius", self.dsp_iniRad)
         form.addRow("[Reg] Max Iterations", self.sp_maxIter)
         self.dsp_gbd = QDoubleSpinBox(); self.dsp_gbd.setRange(0.0, 50.0); self.dsp_gbd.setSingleStep(0.1); self.dsp_gbd.setValue(params.gausBlurDif)
         self.dsp_gbi = QDoubleSpinBox(); self.dsp_gbi.setRange(0.0, 50.0); self.dsp_gbi.setSingleStep(0.1); self.dsp_gbi.setValue(params.gausBlurIn)
@@ -78,12 +68,7 @@ class ParamDialog(QDialog):
 
     def apply(self) -> None:
         """Update the bound RegSegParams with the current UI values."""
-        self.params.numSpaSam = int(self.sp_numSpaSam.value())
-        self.params.numHisBin = int(self.sp_numHisBin.value())
-        self.params.allPix = bool(self.cb_allPix.isChecked())
-        self.params.groFac = float(self.dsp_groFac.value())
         self.params.epsilon = float(self.dsp_epsilon.value())
-        self.params.iniRad = float(self.dsp_iniRad.value())
         self.params.maxIter = int(self.sp_maxIter.value())
         self.params.gausBlurDif = float(self.dsp_gbd.value())
         self.params.gausBlurIn = float(self.dsp_gbi.value())
