@@ -8,9 +8,8 @@ import json
 import numpy as np
 import cv2
 from PyQt6.QtCore import Qt, QThread, pyqtSlot, QPoint, QRect
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QAction
 from PyQt6.QtWidgets import (
-    QAction,
     QCheckBox,
     QDialog,
     QDoubleSpinBox,
