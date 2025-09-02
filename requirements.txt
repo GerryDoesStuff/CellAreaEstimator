@@ -1,0 +1,6 @@
+numpy
+opencv-python
+PyQt6
+openpyxl
+scikit-image
+pytest
